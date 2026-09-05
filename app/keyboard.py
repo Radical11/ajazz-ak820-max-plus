@@ -5,11 +5,9 @@ Supports both connection modes:
   2.4 GHz dongle: 1a2c:a036
 """
 
-import glob
+import hid
 import json
 import os
-import re
-import select
 import time
 
 VID = 0x1A2C
@@ -64,58 +62,17 @@ def _pkt(opcode: int, payload: bytes = b"") -> bytes:
     return body + bytes(REPORT_LEN - len(body))
 
 
-def find_hidraw_device(vid=VID, pids=KNOWN_PIDS, interface=TARGET_INTERFACE) -> str:
+def find_hid_device(vid=VID, pids=KNOWN_PIDS, interface=TARGET_INTERFACE):
     """
-    Scan /sys/class/hidraw for any device matching vid and any pid in pids
-    on the given interface number. Tries PIDs in order; first match wins.
+    Scan for any HID device matching vid and any pid in pids
+    on the given interface number.
     """
-    candidates = []
-    for hidraw_path in glob.glob("/sys/class/hidraw/hidraw*"):
-        name = os.path.basename(hidraw_path)
-        real = os.path.realpath(hidraw_path)
-        uevent_path = os.path.join(hidraw_path, "device", "uevent")
-        try:
-            with open(uevent_path) as f:
-                uevent = f.read()
-        except OSError:
-            continue
-
-        hid_id = None
-        for line in uevent.splitlines():
-            if line.startswith("HID_ID="):
-                hid_id = line.split("=", 1)[1]
-        if not hid_id:
-            continue
-
-        parts = hid_id.split(":")
-        if len(parts) != 3:
-            continue
-        this_vid = int(parts[1], 16)
-        this_pid = int(parts[2], 16)
-        if this_vid != vid or this_pid not in pids:
-            continue
-
-        iface_num = None
-        for comp in real.split("/"):
-            m = re.match(r"^[\d\-]+:\d+\.(\d+)$", comp)
-            if m:
-                iface_num = int(m.group(1))
-                break
-        candidates.append((f"/dev/{name}", iface_num, this_pid))
-
-    # Prefer the requested interface; fall back to any match
-    for path, iface_num, pid in candidates:
-        if iface_num == interface:
-            return path
-
-    if candidates:
-        raise RuntimeError(
-            f"Found {vid:04x}:{{{','.join(f'{p:04x}' for p in pids)}}} "
-            f"but not on interface {interface}."
-        )
+    for device_dict in hid.enumerate(vid):
+        if device_dict['product_id'] in pids and device_dict['interface_number'] == interface:
+            return device_dict['path']
     raise RuntimeError(
-        f"No hidraw device found for {vid:04x} with PIDs "
-        f"{', '.join(f'{p:04x}' for p in pids)}."
+        f"No HID device found for {vid:04x} with PIDs "
+        f"{', '.join(f'{p:04x}' for p in pids)} on interface {interface}."
     )
 
 
@@ -127,8 +84,8 @@ class KeyboardRGB:
     LAYOUT_FILE = os.path.join(os.path.dirname(__file__), "..", "test", "keyboard_rgb_keymap.json")
 
     def __init__(self):
-        self.path: str | None = None
-        self.fd: int | None = None
+        self.path: bytes | None = None
+        self.device: hid.device | None = None
         self.leds: list[tuple[int, int, int]] = [(0, 0, 0)] * NUM_LEDS
         self._layout: dict[str, int] = {}
         self._load_layout()
@@ -138,21 +95,22 @@ class KeyboardRGB:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self.fd is not None:
+        if self.device is not None:
             return
-        self.path = find_hidraw_device()
-        self.fd = os.open(self.path, os.O_RDWR)
+        self.path = find_hid_device()
+        self.device = hid.device()
+        self.device.open_path(self.path)
 
     def disconnect(self) -> None:
-        if self.fd is not None:
+        if self.device is not None:
             try:
-                os.close(self.fd)
-            except OSError:
+                self.device.close()
+            except Exception:
                 pass
-            self.fd = None
+            self.device = None
 
     def is_connected(self) -> bool:
-        return self.fd is not None
+        return self.device is not None
 
     def __enter__(self):
         self.connect()
@@ -167,12 +125,20 @@ class KeyboardRGB:
 
     def _write(self, pkt: bytes) -> None:
         assert len(pkt) == REPORT_LEN
-        os.write(self.fd, pkt)
+        # Windows requires a report ID (0x00) prefixed if no report ID is defined
+        if os.name == 'nt':
+            self.device.write(b'\x00' + pkt)
+        else:
+            self.device.write(pkt)
 
     def _try_read(self, timeout: float = 0.2) -> bytes | None:
-        r, _, _ = select.select([self.fd], [], [], timeout)
-        if r:
-            return os.read(self.fd, REPORT_LEN)
+        try:
+            # hidapi uses milliseconds for timeout
+            res = self.device.read(REPORT_LEN, int(timeout * 1000))
+            if res:
+                return bytes(res)
+        except Exception:
+            pass
         return None
 
     # ------------------------------------------------------------------
