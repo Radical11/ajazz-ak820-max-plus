@@ -1,6 +1,6 @@
 <script>
   import { Plus, Download, Upload, Trash2, Check, X, AppWindow } from 'lucide-svelte'
-  import { profiles, profile, settings, status, run, api, toast } from './store.js'
+  import { profiles, profile, settings, status, meta, run, api, toast } from './store.js'
 
   let sel = $profile?.id
   $: P = $profiles.find(p => p.id === sel) ?? $profiles[0]
@@ -87,6 +87,9 @@
         {#if P.id !== 'default'}<button class="btn-danger h-10" on:click={del}><Trash2 size={15} /> Delete</button>{/if}
       </div>
 
+      {#if $meta.web}
+        <p class="text-[12.5px] text-ink-mute max-w-[560px]">Switching profiles automatically per app needs the desktop app; the browser can't see which app you're using.</p>
+      {:else}
       <div>
         <h2 class="text-[14px] font-semibold mb-1">Switch automatically</h2>
         <p class="text-[12.5px] text-ink-mute mb-3 max-w-[560px]">
@@ -112,6 +115,7 @@
         </label>
         {#if $status.foreground}<p class="text-[12px] text-ink-faint mt-2">Last app in front: {$status.foreground}</p>{/if}
       </div>
+      {/if}
 
       <div class="text-[12.5px] text-ink-mute max-w-[560px] leading-relaxed">
         A profile holds lighting, key remaps on both layers, sleep and response settings, and game mode. Edit them on the other pages while the profile is active; changes save as you make them.

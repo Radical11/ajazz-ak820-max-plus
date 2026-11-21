@@ -85,9 +85,9 @@
       <div class="flex items-center gap-3 mb-4">
         {#if recording}
           <button class="btn h-9 bg-bad text-white hover:bg-bad/90" on:click={stopRec}><Square size={13} fill="currentColor" /> Stop recording</button>
-          <span class="text-[13px] text-ink-mute">Type the sequence now — timing is recorded too.</span>
+          <span class="text-[13px] text-ink-mute">Type the sequence now{$meta.web ? ' (in this window)' : ''}. Timing is recorded too.</span>
         {:else}
-          <button class="btn-line h-9" on:click={startRec} disabled={!$meta.hook_available}><Circle size={13} class="text-bad" fill="currentColor" /> Record</button>
+          <button class="btn-line h-9" on:click={startRec} disabled={!$meta.hook_available && !$meta.web}><Circle size={13} class="text-bad" fill="currentColor" /> Record</button>
           <button class="btn-line h-9 {addCapture ? 'border-lav text-lav' : ''}" disabled={full} on:click={() => (addCapture = !addCapture)}>
             <Plus size={14} /> {addCapture ? 'Press a key…' : 'Add a key press'}</button>
           <span class="ml-auto text-[12.5px] text-ink-mute">{current.events.length} / {max} steps — about {(total / 1000).toFixed(2)} s</span>

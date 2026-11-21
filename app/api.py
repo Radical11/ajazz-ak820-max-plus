@@ -22,6 +22,7 @@ from .custom_effects import CustomEffectsEngine, SOFTWARE_MODES
 from .ambient import AmbientEngine
 from .heatmap import HeatmapEngine
 from .layers import Layers
+from .lens import ShortcutLens
 from .stats import TypingStats
 from .keyboard import DeviceNotFound, KeyboardRGB
 from .profiles import Store, apply_keymap, send_action
@@ -61,6 +62,9 @@ class KeyboardAPI:
         self._layers = Layers()
         self._layers.attach(self._kb)
         self._stats = TypingStats()
+        self._lens = ShortcutLens(self._kb, lambda: self._watcher.current, self._lens_show, self._lens_hide,
+                                  suppress=lambda: any(hook.game_mode.values()))
+        self._lens_took_over = False
         self._studio: str | None = None          # 'audio' | 'heatmap' | 'sysmon' | 'effect'
         self._manual_profile = self._store.settings.get("active_profile", "default")
         self._auto_profile: str | None = None
@@ -89,9 +93,12 @@ class KeyboardAPI:
         self._layers.configure(prof.get("layers"), gm)
         if self._store.settings.get("typing_stats"):
             self._stats.set_enabled(True)
+        if self._store.settings.get("shortcut_lens", True):
+            self._lens.set_enabled(True)
 
     def _shutdown(self):
         self._stats.set_enabled(False)
+        self._lens.set_enabled(False)
         self._layers.stop()
         self._stop.set()
         self._watcher.stop()
@@ -574,6 +581,51 @@ class KeyboardAPI:
         prof = self._update_profile(lambda p: p.__setitem__("layers", layers))
         self._layers.configure(layers, prof["game_mode"])
         return _ok(profile=prof)
+
+    # ── shortcut lens ──────────────────────────────────────────────────
+    def _lens_show(self, leds: dict):
+        with self._lock:
+            self._layers.lens = leds
+            try:
+                if self._kb.custom_active and self._kb.base_frame is not None:
+                    self._kb.refresh()
+                else:                                   # take over from a built-in effect
+                    self._lens_took_over = True
+                    self._kb.init_custom_mode(force=True)
+                    self._kb.send_frame(bytes(P.FRAME_BYTES), force=True)
+            except OSError:
+                pass
+
+    def _lens_hide(self):
+        with self._lock:
+            self._layers.lens = None
+            try:
+                if self._lens_took_over:
+                    self._lens_took_over = False
+                    self._apply_lighting(self._store.active_profile()["lighting"])
+                else:
+                    self._kb.refresh()
+            except (OSError, ValueError):
+                pass
+
+    def set_shortcut_lens(self, on: bool) -> dict:
+        if not self._lens.set_enabled(bool(on)):
+            return _err("The shortcut lens needs Windows")
+        return _ok(settings=self._store.update_settings(shortcut_lens=bool(on)))
+
+    # ── games / previews: show a frame without saving it ───────────────
+    def preview_frame(self, leds: list[str]) -> dict:
+        def go():
+            if self._studio:
+                self._stop_studio()
+            self._kb.init_custom_mode()
+            self._kb.leds = [_hex_to_rgb(h) for h in leds]
+            self._kb.push_frame()
+            return _ok()
+        return self._op(go)
+
+    def restore_lighting(self) -> dict:
+        return self._op(lambda: (self._apply_lighting(self._store.active_profile()["lighting"]), _ok(status=self._status()))[1])
 
     # ── typing stats ───────────────────────────────────────────────────
     def get_typing_stats(self) -> dict:

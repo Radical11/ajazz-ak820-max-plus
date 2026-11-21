@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "typing_stats": False,
     "memory_saver": True,
     "theme": "system",
+    "shortcut_lens": True,
 }
 
 

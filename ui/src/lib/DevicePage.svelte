@@ -1,6 +1,6 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { Gamepad2, Timer, Zap, Activity, Power, BarChart3, Cpu } from 'lucide-svelte'
+  import { Gamepad2, Timer, Zap, Activity, Power, BarChart3, Cpu, ScanEye } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
   import { profile, settings, meta, pressed, status, run, api, toast } from './store.js'
   import { KEY_BY_HID, KEYS } from './layout.js'
@@ -104,6 +104,19 @@
     </div>
   </div>
 
+  {#if !$meta.web}
+  <div>
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-[14px] font-semibold flex items-center gap-2 mb-1"><ScanEye size={16} class="text-lav" /> Shortcut lens</h2>
+        <p class="text-[12.5px] text-ink-mute max-w-[640px]">Hold Ctrl, Alt or Win for a moment and the keys that do something in the app you're using light up. Works in VS Code, browsers, Explorer, Photoshop, Discord and everywhere else for the common shortcuts. It stays off while game mode is on.</p>
+      </div>
+      <button class="{$settings.shortcut_lens !== false ? 'btn-line' : 'btn-primary'}"
+              on:click={() => run('set_shortcut_lens', [$settings.shortcut_lens === false]).then(r => settings.set(r.settings))}>
+        {$settings.shortcut_lens !== false ? 'Turn off' : 'Turn on'}</button>
+    </div>
+  </div>
+
   <div>
     <h2 class="text-[14px] font-semibold flex items-center gap-2 mb-1"><Gamepad2 size={16} class="text-lav" /> Game mode</h2>
     <p class="text-[12.5px] text-ink-mute mb-3">Block keys that throw you out of a game. Saved with the profile, so link a game to it on the Profiles page to turn this on automatically.</p>
@@ -120,6 +133,7 @@
       {/each}
     </div>
   </div>
+  {/if}
 
   <div>
     <div class="flex items-center justify-between mb-3">
@@ -143,6 +157,7 @@
     {/if}
   </div>
 
+  {#if !$meta.web}
   <div>
     <div class="flex items-center justify-between mb-3">
       <div>
@@ -182,11 +197,12 @@
       </div>
     {/if}
   </div>
+  {/if}
 
   <div class="grid grid-cols-2 gap-10">
     <div>
       <h2 class="text-[14px] font-semibold flex items-center gap-2 mb-3"><Power size={16} class="text-lav" /> App</h2>
-      <div class="flex flex-col gap-2.5 text-[13px]">
+      <div class="flex flex-col gap-2.5 text-[13px] {$meta.web ? 'hidden' : ''}">
         <label class="flex items-center gap-2.5"><input type="checkbox" class="accent-lav w-4 h-4" checked={$settings.launch_at_login} on:change={e => setApp({ launch_at_login: e.currentTarget.checked })} /> Start with Windows</label>
         <label class="flex items-center gap-2.5"><input type="checkbox" class="accent-lav w-4 h-4" checked={$settings.start_minimized} on:change={e => setApp({ start_minimized: e.currentTarget.checked })} /> Start hidden in the tray</label>
         <label class="flex items-center gap-2.5"><input type="checkbox" class="accent-lav w-4 h-4" checked={$settings.close_to_tray} on:change={e => setApp({ close_to_tray: e.currentTarget.checked })} /> Keep running in the tray when the window closes</label>

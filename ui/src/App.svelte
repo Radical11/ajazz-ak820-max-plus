@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte'
-  import { Lightbulb, Keyboard, Repeat, Layers, SlidersHorizontal, Usb, Wifi, Unplug, Command } from 'lucide-svelte'
-  import { ready, page, status, profile, profiles, toasts, paletteOpen, loadState, waitForBackend, run } from './lib/store.js'
+  import { Lightbulb, Keyboard, Repeat, Layers, SlidersHorizontal, Usb, Wifi, Unplug, Command, Gamepad } from 'lucide-svelte'
+  import { ready, page, status, profile, profiles, toasts, paletteOpen, meta, loadState, waitForBackend, run } from './lib/store.js'
+  import GamesPage from './lib/GamesPage.svelte'
   import LightingPage from './lib/LightingPage.svelte'
   import KeysPage from './lib/KeysPage.svelte'
   import MacrosPage from './lib/MacrosPage.svelte'
@@ -15,6 +16,7 @@
     { id: 'macros',   label: 'Macros',   icon: Repeat,    hint: 'Record and edit key sequences' },
     { id: 'profiles', label: 'Profiles', icon: Layers,    hint: 'Switch setups, link them to apps' },
     { id: 'device',   label: 'Device',   icon: SlidersHorizontal, hint: 'Sleep, response time, game mode, key test' },
+    { id: 'play',     label: 'Play',     icon: Gamepad,   hint: 'Games played on the keyboard lights' },
   ]
   let failed = ''
 
@@ -25,7 +27,7 @@
 
   function onKey(e) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen.update(v => !v) }
-    if (e.ctrlKey && /^[1-5]$/.test(e.key)) { e.preventDefault(); page.set(NAV[+e.key - 1].id) }
+    if (e.ctrlKey && /^[1-6]$/.test(e.key)) { e.preventDefault(); page.set(NAV[+e.key - 1].id) }
   }
 
   $: conn = $status.connected ? ($status.connection === 'wireless' ? 'Wireless' : 'Wired') : 'Not connected'
@@ -87,6 +89,13 @@
         {#if $status.connected && $status.firmware}
           <div class="text-[11.5px] text-ink-faint mt-1">Firmware {$status.firmware}</div>
         {/if}
+        {#if !$status.connected && $meta.web}
+          {#if $meta.hid_supported}
+            <button class="btn-primary w-full mt-2" on:click={() => run('connect_device', [], { success: 'Keyboard connected' })}>Connect keyboard</button>
+          {:else}
+            <p class="text-[11.5px] text-ink-mute mt-1 leading-snug">Open this page in Chrome or Edge to connect the keyboard.</p>
+          {/if}
+        {/if}
         {#if !$status.connected && $status.error}
           <p class="text-[11.5px] text-ink-mute mt-1 leading-snug">{$status.error}</p>
         {/if}
@@ -123,7 +132,8 @@
       {:else if $page === 'keys'}<KeysPage />
       {:else if $page === 'macros'}<MacrosPage />
       {:else if $page === 'profiles'}<ProfilesPage />
-      {:else}<DevicePage />{/if}
+      {:else if $page === 'device'}<DevicePage />
+      {:else}<GamesPage />{/if}
     </div>
   </main>
 </div>

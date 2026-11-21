@@ -1,0 +1,42 @@
+[package]
+name = "ak820studio"
+version = "2.0.0"
+description = "AK820 Studio, software for the AJAZZ AK820 Max Plus"
+edition = "2021"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hidapi = { version = "2", default-features = false, features = ["windows-native"] }
+cpal = "0.15"
+rustfft = "6"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+rfd = { version = "0.15", default-features = false }
+winreg = "0.55"
+
+[dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
+  "Win32_Graphics_Gdi",
+]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

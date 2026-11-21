@@ -30,6 +30,29 @@ run.bat --minimized  start hidden in the tray
 run.bat --debug    run with a console and the web inspector enabled
 ```
 
+## Desktop app (Tauri)
+
+The recommended desktop build is a small native app: the same Svelte UI in Windows' built-in WebView2, with a Rust backend for HID, the global key hook, foreground-app tracking, system audio, screen sampling and the tray.
+
+```
+cd ui && npm install && cd ..
+npm --prefix ui exec tauri build -- --config src-tauri/tauri.conf.json   # installer in src-tauri/target/release/bundle/nsis
+```
+
+Needs the Rust toolchain (rustup) and Visual Studio C++ build tools. The Python app (`run.bat`) still works and uses the same UI.
+
+## Web version
+
+The same UI also runs in Chrome or Edge with no install, talking to the keyboard over WebHID:
+
+```
+cd ui
+npm run build
+npm run preview        # open http://localhost:4173 and click "Connect keyboard"
+```
+
+Host `ui/dist` on any HTTPS site to share it. In the browser you get key remaps, macros, sleep and response settings, built-in and app-drawn effects, per-key painting, music and screen lighting (via the share prompt), layers, profiles and the games. Game mode, per-app profile switching, the shortcut lens, typing stats and system-wide key capture need the desktop app, because browsers can't see keys pressed in other apps.
+
 ## Data location
 
 Profiles, macros, and settings are stored in `%APPDATA%\AK820Studio`.

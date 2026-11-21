@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte'
   import { Paintbrush, PaintBucket, Eraser, Save, Play, Square, ArrowLeftRight } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
-  import { profile, modes, leds, status, audioDevices, audioConfig, run, api, toast, NUM_LEDS } from './store.js'
+  import { profile, modes, leds, status, audioDevices, audioConfig, meta, run, api, toast, NUM_LEDS } from './store.js'
   import { HID_NAMES } from './keycodes.js'
   import { KEYS } from './layout.js'
 
@@ -15,7 +15,7 @@
   let tab = L.kind === 'custom' ? 'paint' : L.kind === 'studio' && L.engine !== 'effect' ? 'live' : 'effects'
 
   // ── layers ──────────────────────────────────────────────────────────
-  const LAYER_DEFAULTS = { caps: { on: true, color: '#ffffff' }, highlight: { on: false, color: '#f0404e', keys: [0x1A, 0x04, 0x16, 0x07] }, game: { on: true, color: '#f0404e' } }
+  const LAYER_DEFAULTS = { timer: { on: false, color: '#6d5bd0', minutes: 25, ends_at: 0 }, caps: { on: true, color: '#ffffff' }, highlight: { on: false, color: '#f0404e', keys: [0x1A, 0x04, 0x16, 0x07] }, game: { on: true, color: '#f0404e' } }
   let layers = JSON.parse(JSON.stringify({ ...LAYER_DEFAULTS, ...($profile?.layers ?? {}) }))
   for (const k in LAYER_DEFAULTS) layers[k] = { ...LAYER_DEFAULTS[k], ...layers[k] }
   let pickHighlight = false
@@ -217,7 +217,7 @@
   {:else if tab === 'live'}
     <div class="flex items-center gap-4 mb-6">
       <div class="seg">
-        {#each Object.entries(engineLabel) as [id, name]}
+        {#each Object.entries(engineLabel).filter(([id]) => !($meta.web && id === 'sysmon')) as [id, name]}
           <button aria-pressed={engine === id} on:click={() => (engine = id)}>{name}</button>
         {/each}
       </div>
@@ -238,7 +238,7 @@
             <option value={null}>Default microphone</option>
             {#each $audioDevices as d}<option value={d.id}>{d.name}</option>{/each}
           </select>
-          <span class="text-[12px] text-ink-mute">"What's playing on this PC" listens to your speakers directly, so you don't need Stereo Mix.</span>
+          <span class="text-[12px] text-ink-mute">{#if $meta.web}For "What's playing", pick a screen or tab and tick "Share audio" in the browser's prompt. {/if}"What's playing on this PC" listens to your speakers directly, so you don't need Stereo Mix.</span>
         </label>
         <div class="flex flex-col gap-2"><span class="label">Style</span>
           <div class="seg self-start">
@@ -295,6 +295,20 @@
   {:else if tab === 'layers'}
     <p class="text-[12.5px] text-ink-mute mb-5 max-w-[640px]">Layers sit on top of per-key colour and live lighting, and are saved with the profile. The keyboard's built-in effects run on the keyboard itself, so layers don't show over them.</p>
     <div class="flex flex-col gap-3 max-w-[760px]">
+      <div class="flex items-center gap-4 rounded-xl border border-rule bg-card px-4 py-3">
+        <div class="flex-1">
+          <div class="text-[13.5px] font-semibold">Focus timer</div>
+          <div class="text-[12.5px] text-ink-mute">The number row drains as time runs out, then blinks when it's done.</div>
+        </div>
+        <label class="flex items-center gap-2 text-[12.5px] text-ink-mute">
+          <input class="field w-16" type="number" min="1" max="180" bind:value={layers.timer.minutes} /> min</label>
+        {#if layers.timer.on && layers.timer.ends_at}
+          <button class="btn-line" on:click={() => { layers.timer.on = false; layers.timer.ends_at = 0; saveLayers() }}>Stop</button>
+        {:else}
+          <button class="btn-primary" on:click={() => { layers.timer.on = true; layers.timer.ends_at = Date.now() + layers.timer.minutes * 60000; saveLayers() }}>Start</button>
+        {/if}
+        <input type="color" class="w-9 h-9" bind:value={layers.timer.color} on:change={saveLayers} aria-label="Timer colour" />
+      </div>
       {#each [['caps', 'Caps Lock indicator', 'Caps Lock lights up while it is on.'], ['game', 'Game mode keys', 'Blocked keys (Win, Tab, F4) turn this colour while game mode blocks them.'], ['highlight', 'Highlight keys', 'Chosen keys always show this colour, for example WASD in a game profile.']] as [id, name, hint]}
         <div class="flex items-center gap-4 rounded-xl border border-rule bg-card px-4 py-3">
           <button class="w-9 h-5 rounded-full relative shrink-0 transition-colors {layers[id].on ? 'bg-lav' : 'bg-ink/15'}" aria-pressed={layers[id].on} aria-label="Toggle {name}"

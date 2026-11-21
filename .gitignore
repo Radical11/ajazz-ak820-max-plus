@@ -34,3 +34,8 @@ Thumbs.db
 dist-app/
 build-app/
 dist-installer/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+.claude/

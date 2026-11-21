@@ -18,6 +18,7 @@ import threading
 from .layout import HID_TO_LED
 
 DEFAULT_LAYERS = {
+    "timer": {"on": False, "color": "#6d5bd0", "minutes": 25, "ends_at": 0},
     "caps": {"on": True, "color": "#ffffff"},
     "highlight": {"on": False, "color": "#f0404e", "keys": [0x1A, 0x04, 0x16, 0x07]},  # W A S D
     "game": {"on": True, "color": "#f0404e"},
@@ -44,6 +45,7 @@ class Layers:
         self.game_mode = {"win": False, "alt_tab": False, "alt_f4": False}
         self._caps = caps_on()
         self._kb = None
+        self.lens: dict[int, tuple] | None = None   # led -> rgb while the shortcut lens is showing
         self._stop = threading.Event()
         self._thread = None
 
@@ -76,16 +78,34 @@ class Layers:
                 pass
 
     def _watch(self):
+        tick = 0
         while not self._stop.wait(0.12):
             c = caps_on()
             if c != self._caps:
                 self._caps = c
                 if self.cfg["caps"]["on"]:
                     self._refresh()
+            tick += 1
+            t = self.cfg["timer"]
+            if t["on"] and t.get("ends_at") and tick % 4 == 0:   # timer bar drains / flashes when done
+                self._refresh()
 
     def apply(self, rgb: bytes) -> bytes:
         cfg = self.cfg
         paints: dict[int, tuple] = {}
+        t = cfg["timer"]
+        if t["on"] and t.get("ends_at"):
+            import time as _t
+            left = max(0.0, t["ends_at"] / 1000 - _t.time())
+            total = max(1.0, float(t.get("minutes", 25)) * 60)
+            row = sorted((v for v in HID_TO_LED.values() if v[2] == 1), key=lambda v: v[3])
+            n = -(-int(left / total * len(row) * 1000) // 1000)
+            col = _rgb(t["color"])
+            for i, v in enumerate(row):
+                if i < n:
+                    paints[v[0]] = col
+                elif left == 0 and int(_t.time() * 2) % 2:
+                    paints[v[0]] = (240, 64, 78)
         if cfg["highlight"]["on"]:
             col = _rgb(cfg["highlight"]["color"])
             for hid in cfg["highlight"].get("keys", []):
@@ -100,6 +120,11 @@ class Layers:
                         paints[HID_TO_LED[hid][0]] = col
         if cfg["caps"]["on"] and self._caps:
             paints[HID_TO_LED[0x39][0]] = _rgb(cfg["caps"]["color"])
+        if self.lens:
+            out = bytearray(len(rgb))           # lens: only the shortcut keys, on black
+            for led, (r, g, b) in self.lens.items():
+                out[led * 3:led * 3 + 3] = bytes((r, g, b))
+            return bytes(out)
         if not paints:
             return rgb
         out = bytearray(rgb)
