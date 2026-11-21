@@ -147,3 +147,24 @@ pub fn grab_screen(cols: i32, rows: i32) -> Result<Vec<u8>, String> {
         Ok(buf)
     }
 }
+
+/// Seconds since the last keyboard or mouse input anywhere in Windows.
+#[tauri::command]
+pub fn idle_seconds() -> f64 {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    unsafe {
+        let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if !GetLastInputInfo(&mut li).as_bool() {
+            return 0.0;
+        }
+        GetTickCount().wrapping_sub(li.dwTime) as f64 / 1000.0
+    }
+}
+
+/// Whether Caps Lock is currently on (for the Caps Lock lighting layer).
+#[tauri::command]
+pub fn caps_lock_on() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+    unsafe { GetKeyState(0x14) & 1 == 1 }
+}

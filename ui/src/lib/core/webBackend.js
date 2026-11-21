@@ -42,6 +42,16 @@ export class WebBackend {
     this.macros = load('macros', [])
     this.settings = { ...DEFAULT_SETTINGS, ...load('settings', {}) }
     this.caps = false
+    this.dim = 1
+    this.asleep = false
+    this.lastActivity = Date.now()
+    window.addEventListener('pointermove', () => (this.lastActivity = Date.now()), { passive: true })
+    setInterval(() => this._scheduleTick(), 5000)
+    setTimeout(() => this._scheduleTick(), 0)
+    setInterval(() => {   // keep the focus timer bar moving over static lighting
+      const t = this._active().layers?.timer
+      if (t?.on && t.ends_at && this.custom && this.base && !this.loop && !this.asleep) this._frame(this.base).catch(() => {})
+    }, 1000)
     this.inPageKeys = new Set()
     window.addEventListener('keydown', e => this._pageKey(e, true), true)
     window.addEventListener('keyup', e => this._pageKey(e, false), true)
@@ -52,21 +62,46 @@ export class WebBackend {
   }
 
   get supported() { return 'hid' in navigator }
+
+  // ── lighting schedule: dim at night, lights off when you step away ──
+  _scheduleTick() {
+    const sc = this.settings.schedule ?? {}
+    const n = sc.night ?? {}, mins = s => { const [h, m] = (s || '0:0').split(':').map(Number); return h * 60 + m }
+    const d = new Date(), cur = d.getHours() * 60 + d.getMinutes(), a = mins(n.from ?? '22:00'), b = mins(n.to ?? '07:00')
+    const night = !!n.on && (a <= b ? cur >= a && cur < b : cur >= a || cur < b)
+    const dim = night ? Math.max(0.05, Math.min(1, n.level ?? 0.3)) : 1
+    if (dim !== this.dim) { this.dim = dim; if (this.device && !this.asleep) this._applyLighting(this._active().lighting).catch(() => {}) }
+    return this._idleSeconds().then(idle => {
+      const limit = (sc.idle?.minutes ?? 10) * 60
+      if (sc.idle?.on && this.idleSupported && idle >= limit && !this.asleep && this.device) this._lightsOut()
+      else if (this.asleep && (idle < 5 || !sc.idle?.on)) this._wake()
+    })
+  }
+  get idleSupported() { return false }   // a browser tab can't see input in other apps
+  async _idleSeconds() { return (Date.now() - (this.lastActivity ?? Date.now())) / 1000 }
+  async _lightsOut() {
+    this._stopStudio(); await this._custom().catch(() => {})
+    await this._send(P.framePackets(new Uint8Array(324))).catch(() => {})
+    this.asleep = true; emit('ak:status', this._status())
+  }
+  async _wake() { this.asleep = false; this.lastFrame = null; await this._applyLighting(this._active().lighting).catch(() => {}); emit('ak:status', this._status()) }
   _persist() { save('profiles', this.profiles); save('macros', this.macros); save('settings', this.settings) }
   _active() { return norm(this.profiles[this.settings.active_profile] ?? this.profiles.default) }
   _list() { return Object.values(this.profiles).map(norm).sort((a, b) => (a.id !== 'default') - (b.id !== 'default') || a.name.localeCompare(b.name)) }
   _status() {
     return { connected: !!this.device, connection: this.device ? (this.device.productId === P.PID_WIRED ? 'wired' : 'wireless') : 'none',
       studio: this.studio, error: this.error, active_profile: this.settings.active_profile, auto_profile: null, foreground: '',
-      battery: this.device ? this.battery : null, firmware: null, platform: 'web' }
+      battery: this.device ? this.battery : null, firmware: null, platform: 'web', asleep: this.asleep, dimmed: this.dim < 1, idle_supported: this.idleSupported }
   }
 
   // ── transport ──────────────────────────────────────────────────────
   _send(packets) {
     const dev = this.device
     if (!dev) return Promise.reject(new Error('Connect the keyboard first'))
-    this.queue = this.queue.then(async () => { for (const p of packets) await dev.sendReport(0, p) })
-    return this.queue.catch(e => { this.queue = Promise.resolve(); throw e })
+    const task = async () => { for (const p of packets) await dev.sendReport(0, p) }
+    const run = this.queue.then(task, task)
+    this.queue = run.catch(() => {})
+    return run
   }
   async _open(dev) {
     if (!dev.opened) await dev.open()
@@ -98,7 +133,11 @@ export class WebBackend {
 
   // ── lighting ───────────────────────────────────────────────────────
   async _frame(rgb, force = false) {
-    const out = this._overlay(rgb)
+    if (this.asleep) return
+    let out = this._overlay(rgb)
+    if (this.dim < 1) out = out.map(v => v * this.dim)
+    const now = performance.now()
+    if (now - (this.mirrorAt ?? 0) > 50) { this.mirrorAt = now; emit('ak:frame', out) }
     const key = out.join(',')
     if (!force && key === this.lastFrame) return
     this.lastFrame = key
@@ -126,14 +165,18 @@ export class WebBackend {
     clearInterval(this.loop); this.loop = null
     if (this.media) { this.media.getTracks().forEach(t => t.stop()); this.media = null }
     this.audioCtx?.close?.(); this.audioCtx = null
-    this.studio = null; this.heat = null
+    this.studio = null; this.heat = null; this.effect = null
+    emit('ak:frame', null)
   }
   async _applyLighting(L) {
     this._stopStudio()
+    this.base = null
+    if (this.asleep) return          // applied when you come back (_wake)
     if (L.kind === 'hardware') {
       if (SOFTWARE_EFFECTS[L.mode]) return this._startEffect(L)
       this.custom = false
-      return this._send([P.modePacket(+L.mode, +L.brightness, +L.speed, +L.direction, P.COLORS[L.color] ?? 7, P.COLORS[L.color2] ?? 7)])
+      emit('ak:frame', null)
+      return this._send([P.modePacket(+L.mode, this.dim < 1 ? Math.min(+L.brightness, Math.round(4 * this.dim)) : +L.brightness, +L.speed, +L.direction, P.COLORS[L.color] ?? 7, P.COLORS[L.color2] ?? 7)])
     }
     if (L.kind === 'custom') {
       this.leds = L.leds
@@ -147,6 +190,7 @@ export class WebBackend {
   async _startEffect(cfg) {
     await this._custom()
     const render = createEffect(+cfg.mode, cfg), t0 = performance.now()
+    this.effect = render
     this.studio = 'effect'
     this.loop = setInterval(() => this._frame(render((performance.now() - t0) / 1000)).catch(() => {}), 40)
   }
@@ -184,7 +228,8 @@ export class WebBackend {
     this.caps = e.getModifierState?.('CapsLock') ?? this.caps
     const hid = DOM_CODE_TO_HID[e.code]
     if (hid == null) return
-    if (down && this.heat) { const k = KEY_BY_HID[hid]; k && this.heat.hit(k.led) }
+    if (down && (this.heat || this.effect?.reactive)) { const k = KEY_BY_HID[hid]; if (k) { this.heat?.hit(k.led); this.effect?.hit?.(k.led) } }
+    if (down) this.lastActivity = Date.now()
     if (this.tester) emit('ak:key', { hid, down, t: performance.now() / 1000 })
     if (this.recording && !(down && this.inPageKeys.has(hid))) {
       const now = performance.now(), rec = this.recording
@@ -225,6 +270,7 @@ export class WebBackend {
     return this._wrap(async () => {
       this._stopStudio(); await this._custom()
       const rgb = new Uint8Array(324); leds.forEach((h, i) => rgb.set(hexToRgb(h), i * 3))
+      this.base = rgb
       await this._frame(rgb); return ok()
     })
   }
@@ -323,6 +369,8 @@ export class WebBackend {
         try {
           const data = JSON.parse(await input.files[0].text())
           const prof = data.format === 'ak820studio-profile' ? data.profile : data
+          if (!prof || typeof prof !== 'object' || !prof.keymap) throw new Error('no profile inside')
+          prof.id = slug(prof.id || prof.name || 'imported'); prof.name = prof.name || 'Imported'
           for (const m of data.macros ?? []) this.save_macro(m)
           if (this.profiles[prof.id]) { prof.id += '-imported'; prof.name = `${prof.name} (imported)` }
           const p = this._saveProfile(prof)
@@ -347,7 +395,7 @@ export class WebBackend {
   set_game_mode() { return err(DESKTOP_ONLY) }
   set_layers(layers) { const p = this._mutate(p => (p.layers = layers)); if (this.custom && this.base && !this.loop) this._frame(this.base, true).catch(() => {}); return ok({ profile: p }) }
   key_tester(on) { this.tester = !!on; return ok({ page_only: true }) }
-  update_settings(s) { Object.assign(this.settings, s); this._persist(); return ok({ settings: this.settings }) }
+  update_settings(s) { Object.assign(this.settings, s); this._persist(); this._scheduleTick(); return ok({ settings: this.settings }) }
   get_typing_stats() { return ok({ stats: { enabled: false, wpm: 0, today: 0, week: [], heat: {}, top: [] } }) }
   set_typing_stats() { return err(DESKTOP_ONLY) }
   clear_typing_stats() { return this.get_typing_stats() }

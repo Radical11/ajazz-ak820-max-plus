@@ -97,7 +97,7 @@ fn main() {
         .manage(Mutex::new(System::new()))
         .invoke_handler(tauri::generate_handler![
             hid::hid_open, hid::hid_write, hid::hid_close,
-            winsys::set_game_mode, winsys::set_key_events, winsys::grab_screen,
+            winsys::set_game_mode, winsys::set_key_events, winsys::grab_screen, winsys::idle_seconds, winsys::caps_lock_on,
             audio::audio_start, audio::audio_stop,
             sysmon, foreground, export_file, import_file, set_autostart, set_close_to_tray, legacy_data, quit
         ])

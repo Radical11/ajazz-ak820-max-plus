@@ -1,8 +1,8 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { Gamepad2, Timer, Zap, Activity, Power, BarChart3, Cpu, ScanEye } from 'lucide-svelte'
+  import { Gamepad2, Timer, Zap, Activity, Power, BarChart3, Cpu, ScanEye, Moon } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
-  import { profile, settings, meta, pressed, status, run, api, toast } from './store.js'
+  import { profile, settings, meta, pressed, status, platform, run, api, toast } from './store.js'
   import { KEY_BY_HID, KEYS } from './layout.js'
   import { HID_NAMES } from './keycodes.js'
 
@@ -63,6 +63,12 @@
     return out
   })()
   $: weekMax = Math.max(1, ...(ts?.week ?? []).map(w => w.total))
+
+  $: sched = $settings.schedule ?? {}
+  function setSched(part, patch) {
+    const next = { ...sched, [part]: { ...(sched[part] ?? {}), ...patch } }
+    setApp({ schedule: next })
+  }
 
   async function resetKeyboardKeys() {
     if (!confirm('Restore every key on the keyboard to its factory function? Your saved profiles are kept and you can re-apply one any time.')) return
@@ -196,6 +202,36 @@
         </div>
       </div>
     {/if}
+  </div>
+  {/if}
+
+  {#if $platform !== 'desktop' || $meta.jsBackend}
+  <div>
+    <h2 class="text-[14px] font-semibold flex items-center gap-2 mb-1"><Moon size={16} class="text-lav" /> Lighting schedule</h2>
+    <p class="text-[12.5px] text-ink-mute mb-4">Dim the lights at night and turn them off when you step away. They come back as soon as you touch the keyboard or mouse.</p>
+    <div class="flex flex-col gap-3 max-w-[760px]">
+      <div class="flex flex-wrap items-center gap-4 rounded-xl border border-rule bg-card px-4 py-3">
+        <label class="flex items-center gap-2.5 text-[13.5px] font-semibold min-w-[150px]">
+          <input type="checkbox" class="accent-lav w-4 h-4" checked={sched.night?.on} on:change={e => setSched('night', { on: e.currentTarget.checked })} /> Night dimming</label>
+        <label class="flex items-center gap-2 text-[12.5px] text-ink-mute">from
+          <input type="time" class="field h-8" value={sched.night?.from ?? '22:00'} on:change={e => setSched('night', { from: e.currentTarget.value })} /></label>
+        <label class="flex items-center gap-2 text-[12.5px] text-ink-mute">to
+          <input type="time" class="field h-8" value={sched.night?.to ?? '07:00'} on:change={e => setSched('night', { to: e.currentTarget.value })} /></label>
+        <label class="flex items-center gap-2 text-[12.5px] text-ink-mute flex-1 min-w-[180px]">brightness
+          <input type="range" min="0.05" max="0.8" step="0.05" value={sched.night?.level ?? 0.3} style="--pct:{((sched.night?.level ?? 0.3) - 0.05) / 0.75 * 100}%"
+                 on:change={e => setSched('night', { level: +e.currentTarget.value })} />
+          <span class="w-9 text-right text-ink">{Math.round((sched.night?.level ?? 0.3) * 100)}%</span></label>
+      </div>
+      <div class="flex flex-wrap items-center gap-4 rounded-xl border border-rule bg-card px-4 py-3">
+        <label class="flex items-center gap-2.5 text-[13.5px] font-semibold min-w-[150px]">
+          <input type="checkbox" class="accent-lav w-4 h-4" checked={sched.idle?.on} disabled={$status.idle_supported === false} on:change={e => setSched('idle', { on: e.currentTarget.checked })} /> Lights off when away</label>
+        {#if $status.idle_supported === false}<span class="text-[12px] text-ink-mute">Needs the desktop app: a browser tab can't tell when you're using other apps.</span>{/if}
+        <label class="flex items-center gap-2 text-[12.5px] text-ink-mute">after
+          <input type="number" min="1" max="240" class="field w-16" value={sched.idle?.minutes ?? 10} on:change={e => setSched('idle', { minutes: +e.currentTarget.value })} /> minutes without input</label>
+        {#if $status.asleep}<span class="chip bg-ink/[0.06] text-ink-mute">Lights are off now</span>{/if}
+        {#if $status.dimmed}<span class="chip bg-lav-wash text-lav-deep">Night dimming is on</span>{/if}
+      </div>
+    </div>
   </div>
   {/if}
 

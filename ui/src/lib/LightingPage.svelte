@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte'
   import { Paintbrush, PaintBucket, Eraser, Save, Play, Square, ArrowLeftRight } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
-  import { profile, modes, leds, status, audioDevices, audioConfig, meta, run, api, toast, NUM_LEDS } from './store.js'
+  import { profile, modes, leds, status, audioDevices, audioConfig, meta, liveFrame, run, api, toast, NUM_LEDS } from './store.js'
   import { HID_NAMES } from './keycodes.js'
   import { KEYS } from './layout.js'
 
@@ -113,7 +113,7 @@
 
 <section class="px-7 pt-6 pb-10 max-w-[1180px]">
   <KeyboardStage
-    colors={tab === 'paint' ? paint : null}
+    colors={tab === 'paint' ? paint : $liveFrame}
     mode={tab === 'paint' ? 'paint' : tab === 'layers' && pickHighlight ? 'select' : 'view'}
     selected={tab === 'layers' ? new Set(layers.highlight.keys) : new Set()}
     on:paint={onPaint}
@@ -170,6 +170,31 @@
           <button class="btn-line self-start" on:click={() => applyFx({ direction: fx.direction ? 0 : 1 })}>
             <ArrowLeftRight size={15} /> {fx.direction ? 'Reversed' : 'Forward'}
           </button>
+        {/if}
+        {#if ctl.includes('P')}
+          <div>
+            <div class="label mb-2">Your colours</div>
+            <div class="flex flex-wrap items-center gap-2">
+              {#each fx.colors ?? ['#6d5bd0', '#33cfe0', '#f0404e'] as c, i}
+                <div class="relative group">
+                  <input type="color" class="w-9 h-9" value={c} aria-label="Colour {i + 1}"
+                         on:change={e => { const cs = [...(fx.colors ?? ['#6d5bd0', '#33cfe0', '#f0404e'])]; cs[i] = e.currentTarget.value; applyFx({ colors: cs }) }} />
+                  {#if (fx.colors ?? [1, 2, 3]).length > 1}
+                    <button class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-card border border-rule text-[10px] leading-none opacity-0 group-hover:opacity-100"
+                            aria-label="Remove colour {i + 1}"
+                            on:click={() => applyFx({ colors: (fx.colors ?? ['#6d5bd0', '#33cfe0', '#f0404e']).filter((_, j) => j !== i) })}>×</button>
+                  {/if}
+                </div>
+              {/each}
+              {#if (fx.colors ?? [1, 2, 3]).length < 6}
+                <button class="w-9 h-9 rounded-lg border border-dashed border-rule text-ink-mute hover:border-lav" aria-label="Add colour"
+                        on:click={() => applyFx({ colors: [...(fx.colors ?? ['#6d5bd0', '#33cfe0', '#f0404e']), '#f2c230'] })}>+</button>
+              {/if}
+            </div>
+          </div>
+        {/if}
+        {#if ctl.includes('R')}
+          <p class="text-[12.5px] text-ink-mute">Reacts to every key you press{$meta.web ? ' while this window is in front' : ', in any app'}.</p>
         {/if}
         {#if ctl.includes('C')}
           <div>

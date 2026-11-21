@@ -24,17 +24,41 @@ export const SOFTWARE_EFFECTS = {
   105: { name: 'Ripple', controls: 'BSC' },
   106: { name: 'Aurora', controls: 'BS' },
   107: { name: 'Plasma', controls: 'BS' },
+  // P = your own colours, R = reacts to typing
+  108: { name: 'Gradient Wave', controls: 'BSDP' },
+  109: { name: 'Colour Breathing', controls: 'BSP' },
+  110: { name: 'Typing Ripples', controls: 'BSPR' },
+  111: { name: 'Key Trails', controls: 'BSPR' },
+  112: { name: 'Fireworks', controls: 'BSR' },
+  113: { name: 'Heartbeat', controls: 'BSP' },
+}
+
+export const DEFAULT_PALETTE = ['#6d5bd0', '#33cfe0', '#f0404e']
+const hex3 = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t)
+/** Smoothly sample a looping palette at position u (0..1). */
+function paletteAt(pal, u) {
+  const n = pal.length
+  if (n === 1) return pal[0]
+  const x = (((u % 1) + 1) % 1) * n, i = Math.floor(x)
+  const f = x - i, e = f * f * (3 - 2 * f)
+  return mix(pal[i % n], pal[(i + 1) % n], e)
 }
 
 /** Returns a stateful renderer for one effect. */
-export function createEffect(id, { brightness = 4, speed = 2, direction = 0, color = 'rgb' } = {}) {
+export function createEffect(id, { brightness = 4, speed = 2, direction = 0, color = 'rgb', colors = DEFAULT_PALETTE } = {}) {
   const gain = (Math.min(4, Math.max(0, brightness)) + 1) / 5
   const sp = 0.4 + Math.min(4, Math.max(0, speed)) * 0.4
   const base = BASE[color]
   const tint = (c, k) => (base ? base.map(v => v * k) : c)
   const heat = new Float32Array(108)
   let lastBolt = 0
-  return function render(t) {
+  const pal = (colors?.length ? colors : DEFAULT_PALETTE).map(hex3)
+  const posOf = Object.fromEntries(POS.map(p => [p.led, p]))
+  let hits = [], now = 0
+  const glow = new Float32Array(108), tint3 = Array.from({ length: 108 }, () => [0, 0, 0])
+  function render(t) {
+    now = t
     const T = t * sp
     const out = new Uint8Array(FRAME_BYTES)
     const put = (led, c) => { out[led * 3] = Math.min(254, c[0] * gain); out[led * 3 + 1] = Math.min(254, c[1] * gain); out[led * 3 + 2] = Math.min(254, c[2] * gain) }
@@ -65,9 +89,59 @@ export function createEffect(id, { brightness = 4, speed = 2, direction = 0, col
       case 107: // plasma: classic sine plasma in full colour
         for (const p of POS) { const v = Math.sin(p.x * 9 + T) + Math.sin(p.y * 7 - T * 1.3) + Math.sin((p.x + p.y) * 6 + T * 0.7); put(p.led, hsv(v / 6 + T * 0.05, 0.85, 1)) }
         break
+      case 108: // gradient wave through your colours
+        for (const p of POS) put(p.led, paletteAt(pal, (direction ? -1 : 1) * (p.x * 0.9 - T * 0.25) + p.y * 0.08))
+        break
+      case 109: { // breathe, moving to the next colour each breath
+        const cyc = T * 0.35, k = Math.sin((cyc % 1) * Math.PI) ** 2, c = pal[Math.floor(cyc) % pal.length]
+        for (const p of POS) put(p.led, c.map(v => v * (0.06 + 0.94 * k)))
+        break }
+      case 110: { // typing ripples: a ring spreads from every key you press
+        hits = hits.filter(h => t - h.t < 1.6)
+        for (const p of POS) {
+          let c = pal[pal.length - 1].map(v => v * 0.05)
+          for (const h of hits) {
+            const r = (t - h.t) * 1.2 * sp, d = Math.hypot((p.x - h.p.x) * 2.4, p.y - h.p.y), k = Math.max(0, 1 - Math.abs(d - r) * 7) * (1 - (t - h.t) / 1.6)
+            if (k > 0) c = mix(c, h.c, Math.min(1, k))
+          }
+          put(p.led, c)
+        }
+        break }
+      case 111: // key trails: pressed keys flare, then cool through your colours
+        for (const p of POS) {
+          glow[p.led] = Math.max(0, glow[p.led] - 0.012 * sp)
+          const g = glow[p.led]
+          put(p.led, g > 0 ? paletteAt(pal, (1 - g) * 0.999).map(v => v * Math.min(1, g * 1.4)) : [0, 0, 0])
+        }
+        break
+      case 112: { // fireworks: each key press bursts into colour around it
+        hits = hits.filter(h => t - h.t < 1.2)
+        for (const p of POS) {
+          let c = [0, 0, 0]
+          for (const h of hits) {
+            const age = t - h.t, d = Math.hypot((p.x - h.p.x) * 2.4, p.y - h.p.y), k = Math.max(0, 1 - d / (0.05 + age * 0.5 * sp)) * (1 - age / 1.2)
+            if (k > 0) c = c.map((v, i) => Math.min(254, v + h.burst[i] * k))
+          }
+          put(p.led, c)
+        }
+        break }
+      case 113: { // heartbeat: double pulse from the centre
+        const ph = (T * 0.6) % 1, beat = Math.exp(-((ph - 0.1) ** 2) / 0.002) + 0.7 * Math.exp(-((ph - 0.28) ** 2) / 0.002)
+        for (const p of POS) { const d = Math.hypot((p.x - 0.5) * 2.4, p.y - 0.5); put(p.led, pal[0].map(v => v * Math.min(1, 0.05 + beat * (1.2 - d)))) }
+        break }
     }
     return out
   }
+  /** Feed a key press (LED index) to reactive effects. */
+  render.hit = led => {
+    const p = posOf[led]
+    if (!p) return
+    if (id === 111) glow[led] = 1
+    else hits.push({ p, t: now, c: pal[Math.floor(Math.random() * pal.length)], burst: hsv(Math.random(), 0.8, 1) })
+    if (hits.length > 40) hits.shift()
+  }
+  render.reactive = id === 110 || id === 111 || id === 112
+  return render
 }
 
 /** Typing heat renderer: call hit(led) on key presses. */

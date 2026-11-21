@@ -52,16 +52,26 @@ class DesktopBackend extends WebBackend {
     invoke('set_game_mode', { win: gm.win, altTab: gm.alt_tab, altF4: gm.alt_f4 })
     invoke('set_close_to_tray', { on: this.settings.close_to_tray !== false })
     this._syncKeyEvents()
+    this._syncCaps()
   }
 
   get supported() { return true }
+  get idleSupported() { return true }
+  async _syncCaps() {
+    try {
+      const on = await invoke('caps_lock_on')
+      if (on !== this.caps) { this.caps = on; if (this.custom && this.base && !this.loop) this._frame(this.base).catch(() => {}) }
+    } catch {}
+  }
   _status() { return { ...super._status(), firmware: this.firmware, platform: 'desktop', auto_profile: this.autoProfile, foreground: this.foreground } }
 
   // ── transport over Rust ────────────────────────────────────────────
   _send(packets) {
     if (!this.device) return Promise.reject(new Error('Connect the keyboard first'))
-    this.queue = this.queue.then(() => invoke('hid_write', { packets: packets.map(p => Array.from(p)) }))
-    return this.queue.catch(e => { this.queue = Promise.resolve(); throw new Error(String(e)) })
+    const task = () => invoke('hid_write', { packets: packets.map(p => Array.from(p)) })
+    const run = this.queue.then(task, task).catch(e => { throw new Error(String(e)) })
+    this.queue = run.catch(() => {})
+    return run
   }
   async _autoConnect() {
     if (this.device || this.connecting) return
@@ -115,7 +125,7 @@ class DesktopBackend extends WebBackend {
         const out = new Uint8Array(324), m = this.sysCfg.mode
         const fill = (keys, u) => keys.slice(0, Math.round(u / 100 * keys.length)).forEach(k => out.set(colorFor(u), k.led * 3))
         let focus
-        if (m === 'split') { const t = Math.floor(order.length / 3); fill(order.slice(0, t), s.cpu); fill(order.slice(t, 2 * t), s.mem); fill(order.slice(2 * t), s.gpu); focus = 'CPU / RAM / GPU' }
+        if (m === 'split') { const h = Math.floor(order.length / 2); fill(order.slice(0, h), s.cpu); fill(order.slice(h), s.mem); focus = 'CPU / RAM' }
         else if (m === 'highest') { const [n, u] = [['CPU', s.cpu], ['RAM', s.mem]].sort((a, b) => b[1] - a[1])[0]; fill(order, u); focus = n }
         else { const i = Math.floor(tick++ / 3) % 2; const [n, u] = [['CPU', s.cpu], ['RAM', s.mem]][i]; fill(order, u); focus = n }
         this.sysStats = { ...s, current_focus: focus }
@@ -131,14 +141,14 @@ class DesktopBackend extends WebBackend {
   get_sysmon_stats() { return ok({ stats: this.sysStats }) }
 
   // ── global keys: heatmap, tester, recorder, stats, lens ────────────
-  _needKeys() { return !!(this.heat || this.tester || this.recording || this.settings.typing_stats || this.settings.shortcut_lens !== false) }
+  _needKeys() { return !!(this.heat || this.effect?.reactive || this.tester || this.recording || this.settings.typing_stats || this.settings.shortcut_lens !== false) }
   _syncKeyEvents() { invoke('set_key_events', { on: this._needKeys() }) }
   _pageKey() {}  // the global hook already covers this window
   _globalKey({ vk, ext, down, injected }) {
     const hid = vkToHid(vk, ext)
     if (hid == null) return
-    if (hid === 0x39 && down && !injected) { this.caps = !this.caps; if (this.custom && this.base && !this.loop) this._frame(this.base).catch(() => {}) }
-    if (down && this.heat) { const k = KEY_BY_HID[hid]; k && this.heat.hit(k.led) }
+    if (hid === 0x39 && !down) this._syncCaps()
+    if (down && (this.heat || this.effect?.reactive)) { const k = KEY_BY_HID[hid]; if (k) { this.heat?.hit(k.led); this.effect?.hit?.(k.led) } }
     if (this.tester) emit('ak:key', { hid, down, t: performance.now() / 1000 })
     if (this.recording && !injected) {
       const rec = this.recording, last = rec[rec.length - 1]
@@ -236,8 +246,9 @@ class DesktopBackend extends WebBackend {
     if (this.custom && this.base && !this.loop) this._frame(this.base, true).catch(() => {})
     return ok({ profile: p })
   }
+  async _idleSeconds() { try { return await invoke('idle_seconds') } catch { return 0 } }
   async update_settings(s) {
-    Object.assign(this.settings, s); this._persist()
+    Object.assign(this.settings, s); this._persist(); this._scheduleTick()
     if ('close_to_tray' in s) invoke('set_close_to_tray', { on: !!s.close_to_tray })
     if ('launch_at_login' in s) { try { await invoke('set_autostart', { on: !!s.launch_at_login }) } catch (e) { return err(e) } }
     return ok({ settings: this.settings })
@@ -252,6 +263,9 @@ class DesktopBackend extends WebBackend {
     try {
       const text = await invoke('import_file'); if (!text) return ok({ cancelled: true })
       const data = JSON.parse(text), prof = data.format === 'ak820studio-profile' ? data.profile : data
+      if (!prof || typeof prof !== 'object' || !prof.keymap) throw new Error('no profile inside')
+      prof.id = (prof.id || prof.name || 'imported').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'imported'
+      prof.name = prof.name || 'Imported'
       for (const m of data.macros ?? []) this.save_macro(m)
       if (this.profiles[prof.id]) { prof.id += '-imported'; prof.name = `${prof.name} (imported)` }
       return ok({ profile: this._saveProfile(prof), profiles: this._list(), macros: this.macros })

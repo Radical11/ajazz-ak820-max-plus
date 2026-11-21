@@ -52,6 +52,15 @@ export const audioDevices = writable([])
 export const audioConfig = writable({})
 export const pressed = writable(new Set())        // HID codes currently held (key tester)
 export const paletteOpen = writable(false)
+// what the app is sending to the keyboard right now (null when the keyboard runs its own effect)
+export const liveFrame = writable(null)
+window.addEventListener('ak:frame', e => {
+  const f = e.detail
+  if (!f) return liveFrame.set(null)
+  const out = new Array(108)
+  for (let i = 0; i < 108; i++) out[i] = '#' + ((1 << 24) | (f[i * 3] << 16) | (f[i * 3 + 1] << 8) | f[i * 3 + 2]).toString(16).slice(1)
+  liveFrame.set(out)
+})
 
 export const activeName = derived(profile, p => p?.name ?? '—')
 
@@ -74,7 +83,7 @@ export async function loadState() {
   modes.set(s.modes)
   meta.set({ sleep_options: s.sleep_options, response_options: s.response_options,
              max_macro_events: s.max_macro_events, hook_available: s.hook_available, colors: s.colors,
-             web: s.platform === 'web', hid_supported: s.hid_supported ?? true })
+             web: s.platform === 'web', hid_supported: s.hid_supported ?? true, jsBackend: !!jsBackend })
   audioDevices.set(s.audio_devices)
   audioConfig.set(s.audio)
   if (s.profile?.lighting?.kind === 'custom') leds.set(s.profile.lighting.leds)
