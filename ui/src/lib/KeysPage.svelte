@@ -1,5 +1,5 @@
 <script>
-  import { RotateCcw, Ban, Keyboard as KbIcon, Music, Command, Repeat, Undo2 } from 'lucide-svelte'
+  import { RotateCcw, Ban, Keyboard as KbIcon, Music, Command, Repeat, Undo2, History } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
   import { profile, macros, run, page } from './store.js'
   import { KEYS, KEY_BY_HID } from './layout.js'
@@ -40,10 +40,24 @@
     combo = new Set(a?.type === 'shortcut' ? a.codes : [])
   }
 
-  async function assign(a) {
-    if (!selected) return
-    await run('assign_key', [+layer, selected.hid, a])
+  // undo history for this session: what each key did before a change
+  let history = []
+  async function assign(a, key = selected, lay = layer, record = true) {
+    if (!key) return
+    const prev = $profile?.keymap?.[lay]?.[String(key.hid)] ?? { type: 'default' }
+    await run('assign_key', [+lay, key.hid, a])
+    if (record) history = [...history.slice(-49), { key, layer: lay, prev, next: a }]
   }
+  async function undo() {
+    const h = history.at(-1)
+    if (!h) return
+    history = history.slice(0, -1)
+    await run('assign_key', [+h.layer, h.key.hid, h.prev], { success: `Undid ${h.key.label}` })
+  }
+  function onUndoKey(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !capture && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); undo() }
+  }
+  $: changes = Object.entries(keymap).map(([src, a]) => ({ key: KEY_BY_HID[+src], action: a })).filter(c => c.key)
 
   function onCapture(e) {
     if (!capture || !selected) return
@@ -63,7 +77,7 @@
   ]
 </script>
 
-<svelte:window on:keydown|capture={onCapture} />
+<svelte:window on:keydown|capture={onCapture} on:keydown={onUndoKey} />
 
 <section class="px-7 pt-6 pb-10 max-w-[1180px]">
   <div class="flex items-center justify-between mb-4">
@@ -73,6 +87,7 @@
     </div>
     <div class="flex items-center gap-2">
       <span class="text-[12.5px] text-ink-mute">{changedCount ? `${changedCount} key${changedCount > 1 ? 's' : ''} changed on this layer` : 'Every key is at its default'}</span>
+      <button class="btn-quiet" disabled={!history.length} title="Undo the last key change (Ctrl+Z)" on:click={undo}><History size={14} /> Undo</button>
       {#if changedCount}<button class="btn-quiet" on:click={() => run('reset_keys', [+layer], { success: 'Layer restored to defaults' })}><RotateCcw size={14} /> Reset layer</button>{/if}
     </div>
   </div>
@@ -81,7 +96,26 @@
   {#if layer === '2'}<p class="text-[12.5px] text-ink-mute mt-3">Fn layer: what a key does while you hold Fn. Greyed keys are reserved by the keyboard's own Fn shortcuts.</p>{/if}
 
   {#if !selected}
-    <div class="mt-8 text-ink-mute text-[13.5px]">Choose a key on the keyboard to change what it does.</div>
+    <div class="mt-7 grid grid-cols-[1fr_360px] gap-10">
+      <p class="text-ink-mute text-[13.5px]">Choose a key on the keyboard to change what it does.</p>
+      <div>
+        <h2 class="text-[13px] font-semibold mb-2">Changed on the {layer === '1' ? 'base' : 'Fn'} layer</h2>
+        {#if changes.length}
+          <ul class="rounded-xl border border-rule bg-card divide-y divide-rule">
+            {#each changes as c}
+              <li class="flex items-center gap-3 h-10 px-3 text-[13px]">
+                <button class="font-cap w-14 text-left hover:text-lav" on:click={() => pick({ detail: { key: c.key } })}>{c.key.label}</button>
+                <span class="text-ink-faint">→</span>
+                <span class="flex-1 truncate">{short(c.action)}</span>
+                <button class="btn-quiet h-7 w-7 px-0" aria-label="Restore {c.key.label}" title="Restore default" on:click={() => assign({ type: 'default' }, c.key)}><Undo2 size={14} /></button>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="text-[12.5px] text-ink-faint">Nothing yet. Every key does what's printed on it.</p>
+        {/if}
+      </div>
+    </div>
   {:else}
     <div class="mt-7 grid grid-cols-[220px_1fr] gap-8">
       <div>
@@ -114,7 +148,7 @@
                 <div class="flex flex-wrap gap-1">
                   {#each g.codes as c}
                     <button class="h-8 min-w-[34px] px-2 rounded-md font-cap text-[12.5px] border transition-colors
-                                   {action?.type === 'key' && action.code === c ? 'bg-lav text-white border-lav' : 'bg-white border-rule hover:border-ink-faint'}"
+                                   {action?.type === 'key' && action.code === c ? 'bg-lav text-white border-lav' : 'bg-card border-rule hover:border-ink-faint'}"
                             on:click={() => assign({ type: 'key', code: c })}>{HID_NAMES[c]}</button>
                   {/each}
                 </div>
@@ -126,7 +160,7 @@
           <div class="grid grid-cols-3 gap-2 max-w-[620px]">
             {#each MEDIA as m}
               <button class="h-10 rounded-lg border px-3 text-left text-[13px] transition-colors
-                             {action?.code === m.code && action?.type !== 'macro' ? 'bg-lav-wash border-lav text-lav-deep font-semibold' : 'bg-white border-rule hover:border-ink-faint'}"
+                             {action?.code === m.code && action?.type !== 'macro' ? 'bg-lav-wash border-lav text-lav-deep font-semibold' : 'bg-card border-rule hover:border-ink-faint'}"
                       on:click={() => assign({ type: 'media', code: m.code })}>{m.name}</button>
             {/each}
           </div>
@@ -134,7 +168,7 @@
         {:else if kind === 'shortcut'}
           <div class="flex flex-wrap items-center gap-2 mb-4">
             {#each MODS as [c, n]}
-              <button class="h-8 px-3 rounded-md border text-[13px] {combo.has(c) ? 'bg-lav text-white border-lav' : 'bg-white border-rule'}" on:click={() => toggleMod(c)}>{n}</button>
+              <button class="h-8 px-3 rounded-md border text-[13px] {combo.has(c) ? 'bg-lav text-white border-lav' : 'bg-card border-rule'}" on:click={() => toggleMod(c)}>{n}</button>
             {/each}
             <span class="text-ink-faint">+</span>
             <button class="btn-line {capture ? 'border-lav text-lav' : ''}" on:click={() => (capture = !capture)}>{capture ? 'Press a key…' : 'Add a key'}</button>
@@ -159,7 +193,7 @@
             <div class="flex flex-col gap-1.5 max-w-[420px]">
               {#each $macros as m}
                 <button class="h-10 flex items-center justify-between rounded-lg border px-3 text-[13px]
-                               {action?.type === 'macro' && action.macro_id === m.id ? 'bg-lav-wash border-lav text-lav-deep font-semibold' : 'bg-white border-rule hover:border-ink-faint'}"
+                               {action?.type === 'macro' && action.macro_id === m.id ? 'bg-lav-wash border-lav text-lav-deep font-semibold' : 'bg-card border-rule hover:border-ink-faint'}"
                         on:click={() => assign({ type: 'macro', macro_id: m.id })}>
                   {m.name}<span class="text-[12px] text-ink-mute font-normal">{m.events.length} steps</span>
                 </button>

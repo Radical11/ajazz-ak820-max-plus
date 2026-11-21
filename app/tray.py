@@ -35,6 +35,7 @@ class TrayIcon:
         self._api = api
         self._icon = None
         self.on_quit = None
+        self.on_show = None
         self.running = False
 
     def start(self):
@@ -56,6 +57,8 @@ class TrayIcon:
 
     def _menu(self):
         def show(icon=None, item=None):
+            if self.on_show:
+                return self.on_show()
             try:
                 self._window.show()
                 self._window.restore()

@@ -46,7 +46,7 @@
         <li>
           <button
             class="w-full flex items-center gap-3 h-9 px-2.5 rounded-lg text-[13.5px] transition-colors
-                   {$page === n.id ? 'bg-white text-ink font-semibold shadow-sm' : 'text-ink-soft hover:bg-ink/[0.05]'}"
+                   {$page === n.id ? 'bg-card text-ink font-semibold shadow-sm' : 'text-ink-soft hover:bg-ink/[0.05]'}"
             aria-current={$page === n.id ? 'page' : undefined}
             title="{n.hint} (Ctrl+{i + 1})"
             on:click={() => page.set(n.id)}
@@ -60,13 +60,13 @@
     </ul>
 
     <div class="mt-auto flex flex-col gap-3 px-1">
-      <button class="flex items-center justify-between h-8 px-2.5 rounded-lg border border-rule bg-white text-[12.5px] text-ink-mute hover:border-ink-faint"
+      <button class="flex items-center justify-between h-8 px-2.5 rounded-lg border border-rule bg-card text-[12.5px] text-ink-mute hover:border-ink-faint"
               on:click={() => paletteOpen.set(true)}>
         <span class="flex items-center gap-2"><Command size={14} /> Quick actions</span>
         <kbd class="text-[11px] text-ink-faint">Ctrl K</kbd>
       </button>
 
-      <div class="rounded-xl px-3 py-2.5 bg-white border border-rule">
+      <div class="rounded-xl px-3 py-2.5 bg-card border border-rule">
         <div class="flex items-center gap-2 text-[12.5px] font-medium">
           {#if $status.connected}
             <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full rounded-full bg-ok opacity-40 animate-ping"></span><span class="relative h-2 w-2 rounded-full bg-ok"></span></span>
@@ -76,6 +76,17 @@
           {/if}
           {conn}
         </div>
+        {#if $status.connected && $status.battery != null}
+          <div class="flex items-center gap-2 mt-2" title="Battery level reported by the keyboard{$status.connection === 'wired' ? ' (charging over USB)' : ''}">
+            <span class="relative w-7 h-3.5 rounded-[3px] border border-ink-faint p-[1.5px]">
+              <span class="block h-full rounded-[1px] {$status.battery <= 15 ? 'bg-bad' : 'bg-ok'}" style="width:{$status.battery}%"></span>
+            </span>
+            <span class="text-[12px] text-ink-soft">{$status.battery}%{$status.connection === 'wired' ? ', charging' : ''}</span>
+          </div>
+        {/if}
+        {#if $status.connected && $status.firmware}
+          <div class="text-[11.5px] text-ink-faint mt-1">Firmware {$status.firmware}</div>
+        {/if}
         {#if !$status.connected && $status.error}
           <p class="text-[11.5px] text-ink-mute mt-1 leading-snug">{$status.error}</p>
         {/if}
@@ -121,7 +132,7 @@
 
 <div class="fixed bottom-5 right-5 flex flex-col gap-2 z-50" aria-live="polite">
   {#each $toasts as t (t.id)}
-    <div class="max-w-sm rounded-xl px-4 py-2.5 text-[13px] shadow-lift border bg-white
+    <div class="max-w-sm rounded-xl px-4 py-2.5 text-[13px] shadow-lift border bg-card
                 {t.kind === 'bad' ? 'border-bad/30 text-bad' : t.kind === 'warn' ? 'border-warn/30 text-ink' : t.kind === 'ok' ? 'border-ok/30 text-ink' : 'border-rule text-ink'}">
       {t.message}
     </div>

@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(ROOT, "ui", "dist", "index.html")
 
 logging.basicConfig(level=logging.INFO if "--debug" in sys.argv else logging.WARNING,
@@ -56,11 +56,33 @@ def main():
     )
     api._attach(window)
     tray = TrayIcon(window, api)
-    state = {"quitting": False}
+    state = {"quitting": False, "unloaded": False}
+
+    def hide_ui():
+        window.hide()
+        if api._store.settings.get("memory_saver", True):
+            # Drop the web page while hidden: most of the RAM is the renderer.
+            try:
+                window.load_html("<html><body style='background:#ECEBF2'></body></html>")
+                state["unloaded"] = True
+            except Exception:
+                pass
+
+    def show_ui():
+        if state["unloaded"]:
+            state["unloaded"] = False
+            window.load_url(INDEX_HTML)
+        window.show()
+        try:
+            window.restore()
+        except Exception:
+            pass
+
+    tray.on_show = show_ui
 
     def on_closing():
         if api._store.settings.get("close_to_tray", True) and tray.running and not state["quitting"]:
-            window.hide()
+            hide_ui()
             return False  # keep running in the tray
         api._shutdown()
         tray.stop()
@@ -76,6 +98,8 @@ def main():
     def started():
         tray.start()
         api._start_background()
+        if minimized:
+            hide_ui()
 
     webview.start(started, debug="--debug" in sys.argv, private_mode=False,
                   storage_path=os.path.join(os.environ.get("APPDATA", ROOT), "AK820Studio", "webview"))

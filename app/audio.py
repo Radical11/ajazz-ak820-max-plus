@@ -15,6 +15,46 @@ try:
 except ImportError:
     SOUNDDEVICE_AVAILABLE = False
 
+try:  # WASAPI loopback: react to whatever is playing, no "Stereo Mix" needed
+    import soundcard as _sc
+    LOOPBACK_AVAILABLE = True
+except Exception:
+    LOOPBACK_AVAILABLE = False
+
+SYSTEM_AUDIO = "system"
+
+
+class _LoopbackStream:
+    """Context manager that feeds system output audio to a sounddevice-style callback."""
+
+    def __init__(self, samplerate, blocksize, callback):
+        self.sr, self.bs, self.cb = samplerate, blocksize, callback
+        self._stop = threading.Event()
+        self._t = None
+        self.error = None
+
+    def _run(self):
+        try:
+            spk = _sc.default_speaker()
+            mic = _sc.get_microphone(id=str(spk.name), include_loopback=True)
+            with mic.recorder(samplerate=self.sr, blocksize=self.bs) as rec:
+                while not self._stop.is_set():
+                    data = rec.record(numframes=self.bs)
+                    mono = data.mean(axis=1, keepdims=True) if data.ndim == 2 else data.reshape(-1, 1)
+                    self.cb(mono, len(mono), None, None)
+        except Exception as e:
+            self.error = str(e)
+
+    def __enter__(self):
+        self._t = threading.Thread(target=self._run, daemon=True, name="Loopback")
+        self._t.start()
+        return self
+
+    def __exit__(self, *a):
+        self._stop.set()
+        if self._t:
+            self._t.join(1.0)
+
 from .keyboard import FRAME_BYTES, NUM_LEDS
 
 # -----------------------------------------------------------------------
@@ -92,7 +132,12 @@ class AudioEngine:
         mode: "volume" | "spectrum"
         keyboard: a connected KeyboardRGB instance
         """
-        if not SOUNDDEVICE_AVAILABLE:
+        if device_id == SYSTEM_AUDIO:
+            if not LOOPBACK_AVAILABLE:
+                self.last_error = "System audio capture isn't available"
+                return False
+        elif not SOUNDDEVICE_AVAILABLE:
+            self.last_error = "No audio input support (sounddevice missing)"
             return False
         if self.running:
             self.stop()
@@ -133,14 +178,16 @@ class AudioEngine:
                 windowed = indata[:, 0] * np.hanning(frames)
                 self._current_fft = np.abs(np.fft.rfft(windowed)) / max(frames, 1)
 
+        def open_source():
+            if device_id == SYSTEM_AUDIO:
+                if not LOOPBACK_AVAILABLE:
+                    raise RuntimeError("System audio capture needs the 'soundcard' package")
+                return _LoopbackStream(cfg["sample_rate"], cfg["block_size"], audio_callback)
+            return sd.InputStream(device=device_id, samplerate=cfg["sample_rate"],
+                                  blocksize=cfg["block_size"], callback=audio_callback, channels=1)
+
         try:
-            with sd.InputStream(
-                device=device_id,
-                samplerate=cfg["sample_rate"],
-                blocksize=cfg["block_size"],
-                callback=audio_callback,
-                channels=1,
-            ):
+            with open_source():
                 last_heartbeat = time.time()
                 frame_time = 1.0 / cfg["target_fps"]
 

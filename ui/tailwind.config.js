@@ -5,11 +5,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        paper:  '#ECEBF2',   // app background
-        sheet:  '#F7F7FB',   // raised surfaces
-        ink:    { DEFAULT: '#1E1C2A', soft: '#4A475C', mute: '#6B6880', faint: '#A19EB3' },
-        rule:   '#DAD8E4',
-        lav:    { DEFAULT: '#6D5BD0', soft: '#B9AEE6', wash: '#E4E0F7', deep: '#4B3BAA' },
+        // theme-aware tokens (values in app.css, light + dark)
+        paper:  'rgb(var(--paper) / <alpha-value>)',
+        sheet:  'rgb(var(--sheet) / <alpha-value>)',
+        card:   'rgb(var(--card) / <alpha-value>)',
+        ink:    { DEFAULT: 'rgb(var(--ink) / <alpha-value>)', soft: 'rgb(var(--ink-soft) / <alpha-value>)', mute: 'rgb(var(--ink-mute) / <alpha-value>)', faint: 'rgb(var(--ink-faint) / <alpha-value>)' },
+        rule:   'rgb(var(--rule) / <alpha-value>)',
+        lav:    { DEFAULT: '#6D5BD0', soft: '#B9AEE6', wash: 'rgb(var(--lav-wash) / <alpha-value>)', deep: 'rgb(var(--lav-deep) / <alpha-value>)' },
         sky:    '#AFC6E6',
         mat:    { DEFAULT: '#1A1926', edge: '#2A2838' },
         cap:    '#EEF0F6',

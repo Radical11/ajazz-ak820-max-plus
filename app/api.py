@@ -19,7 +19,10 @@ from . import protocol as P
 from .appwatch import AppWatcher
 from .audio import AudioEngine, _DEFAULTS as AUDIO_DEFAULTS
 from .custom_effects import CustomEffectsEngine, SOFTWARE_MODES
+from .ambient import AmbientEngine
 from .heatmap import HeatmapEngine
+from .layers import Layers
+from .stats import TypingStats
 from .keyboard import DeviceNotFound, KeyboardRGB
 from .profiles import Store, apply_keymap, send_action
 from .sysmon import SysmonEngine
@@ -54,6 +57,10 @@ class KeyboardAPI:
         self._heatmap = HeatmapEngine()
         self._sysmon = SysmonEngine()
         self._effects = CustomEffectsEngine()
+        self._ambient = AmbientEngine()
+        self._layers = Layers()
+        self._layers.attach(self._kb)
+        self._stats = TypingStats()
         self._studio: str | None = None          # 'audio' | 'heatmap' | 'sysmon' | 'effect'
         self._manual_profile = self._store.settings.get("active_profile", "default")
         self._auto_profile: str | None = None
@@ -76,10 +83,16 @@ class KeyboardAPI:
         threading.Thread(target=self._supervise, daemon=True, name="Supervisor").start()
         if self._store.settings.get("auto_switch", True):
             self._watcher.start()
-        gm = self._store.active_profile()["game_mode"]
+        prof = self._store.active_profile()
+        gm = prof["game_mode"]
         hook.set_game_mode(gm["win"], gm["alt_tab"], gm["alt_f4"])
+        self._layers.configure(prof.get("layers"), gm)
+        if self._store.settings.get("typing_stats"):
+            self._stats.set_enabled(True)
 
     def _shutdown(self):
+        self._stats.set_enabled(False)
+        self._layers.stop()
         self._stop.set()
         self._watcher.stop()
         self._stop_studio()
@@ -107,6 +120,8 @@ class KeyboardAPI:
             "active_profile": self._store.settings.get("active_profile"),
             "auto_profile": self._auto_profile,
             "foreground": self._watcher.current,
+            "battery": self._kb.battery if self._kb.is_connected() else None,
+            "firmware": self._kb.firmware if self._kb.is_connected() else None,
         }
 
     # ── connection supervisor: heartbeat + hot-plug reconnect ─────────
@@ -115,7 +130,10 @@ class KeyboardAPI:
         while not self._stop.is_set():
             if self._kb.is_connected():
                 try:
+                    before = self._kb.battery
                     self._kb.heartbeat()
+                    if self._kb.battery != before:
+                        self._emit("ak:status", self._status())
                 except OSError as e:
                     self._last_error = "Keyboard disconnected"
                     log.info("heartbeat failed: %s", e)
@@ -210,7 +228,7 @@ class KeyboardAPI:
     # lighting
     # ════════════════════════════════════════════════════════════════════
     def _stop_studio(self):
-        for eng in (self._audio, self._heatmap, self._sysmon, self._effects):
+        for eng in (self._audio, self._heatmap, self._sysmon, self._effects, self._ambient):
             if eng.running:
                 eng.stop()
         self._studio = None
@@ -244,13 +262,17 @@ class KeyboardAPI:
                                    cfg.get("color_low", (0, 254, 0)), cfg.get("color_mid", (254, 254, 0)),
                                    cfg.get("color_high", (254, 0, 0)))
             ok = self._sysmon.start(self._kb)
+        elif engine == "ambient":
+            self._ambient.configure(cfg.get("saturation", 1.4), cfg.get("brightness", 1.0), cfg.get("fps", 20))
+            ok = self._ambient.start(self._kb)
         elif engine == "effect":
             ok = self._effects.start(self._kb, int(cfg.get("mode", 100)), int(cfg.get("brightness", 4)),
                                      int(cfg.get("speed", 2)), int(cfg.get("direction", 0)), cfg.get("color", "rgb"))
         else:
             raise ValueError(f"unknown studio engine {engine!r}")
         if not ok:
-            raise ValueError(getattr(self._audio, "last_error", "") or f"Could not start {engine}")
+            err = {"audio": self._audio, "ambient": self._ambient}.get(engine)
+            raise ValueError(getattr(err, "last_error", "") or f"Could not start {engine}")
         self._studio = engine
 
     def set_lighting(self, lighting: dict) -> dict:
@@ -403,6 +425,7 @@ class KeyboardAPI:
         self._store.update_settings(active_profile=pid)
         gm = prof["game_mode"]
         hook.set_game_mode(gm["win"], gm["alt_tab"], gm["alt_f4"])
+        self._layers.configure(prof.get("layers"), gm)
 
         def go():
             warns = apply_keymap(self._kb, prof, self._store)
@@ -543,7 +566,29 @@ class KeyboardAPI:
             return _err("Game mode needs Windows")
         prof = self._update_profile(lambda p: p.__setitem__(
             "game_mode", {"win": bool(win), "alt_tab": bool(alt_tab), "alt_f4": bool(alt_f4)}))
+        self._layers.configure(prof.get("layers"), prof["game_mode"])
         return _ok(profile=prof)
+
+    # ── lighting layers ────────────────────────────────────────────────
+    def set_layers(self, layers: dict) -> dict:
+        prof = self._update_profile(lambda p: p.__setitem__("layers", layers))
+        self._layers.configure(layers, prof["game_mode"])
+        return _ok(profile=prof)
+
+    # ── typing stats ───────────────────────────────────────────────────
+    def get_typing_stats(self) -> dict:
+        return _ok(stats=self._stats.summary())
+
+    def set_typing_stats(self, on: bool) -> dict:
+        if not self._stats.set_enabled(bool(on)):
+            return _err("Typing stats aren't available on this system")
+        s = self._store.update_settings(typing_stats=bool(on))
+        return _ok(settings=s, stats=self._stats.summary())
+
+    def clear_typing_stats(self) -> dict:
+        self._stats.clear()
+        return _ok(stats=self._stats.summary())
+
 
     def key_tester(self, on: bool) -> dict:
         if on:
@@ -568,9 +613,12 @@ class KeyboardAPI:
         if os.name != "nt":
             return
         import winreg
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-        cmd = f'"{pyw}" "{os.path.join(root, "main.py")}" --minimized'
+        if getattr(sys, "frozen", False):          # packaged AK820Studio.exe
+            cmd = f'"{sys.executable}" --minimized'
+        else:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            cmd = f'"{pyw}" "{os.path.join(root, "main.py")}" --minimized'
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
                             0, winreg.KEY_SET_VALUE) as k:
             if on:

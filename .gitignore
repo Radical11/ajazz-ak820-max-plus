@@ -29,3 +29,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Packaging outputs
+dist-app/
+build-app/
+dist-installer/

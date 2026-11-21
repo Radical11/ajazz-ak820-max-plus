@@ -63,7 +63,7 @@
     <button class="btn-primary mb-3 self-start" on:click={blank}><Plus size={15} /> New macro</button>
     {#each $macros as m}
       <button class="h-10 rounded-lg px-3 text-left text-[13.5px] flex items-center justify-between
-                     {current?.id === m.id ? 'bg-white shadow-sm font-semibold' : 'hover:bg-ink/[0.05] text-ink-soft'}"
+                     {current?.id === m.id ? 'bg-card shadow-sm font-semibold' : 'hover:bg-ink/[0.05] text-ink-soft'}"
               on:click={() => select(m)}>{m.name}<span class="text-[12px] text-ink-faint font-normal">{m.events.length}</span></button>
     {:else}
       <p class="text-[13px] text-ink-mute px-1">Macros replay a sequence of key presses from a single key — the keyboard runs them itself, even without the app.</p>
@@ -95,7 +95,7 @@
       </div>
 
       {#if current.events.length}
-        <ol class="rounded-xl border border-rule bg-white divide-y divide-rule max-h-[460px] overflow-y-auto">
+        <ol class="rounded-xl border border-rule bg-card divide-y divide-rule max-h-[460px] overflow-y-auto">
           {#each current.events as ev, i}
             <li class="flex items-center gap-4 h-11 px-4 text-[13px]">
               <span class="w-6 text-ink-faint text-right">{i + 1}</span>

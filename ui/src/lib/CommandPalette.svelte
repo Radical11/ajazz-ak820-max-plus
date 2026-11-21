@@ -34,7 +34,7 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div class="fixed inset-0 z-40 bg-ink/25 flex items-start justify-center pt-[14vh]" on:click|self={() => paletteOpen.set(false)}>
-  <div class="w-[560px] rounded-2xl bg-white shadow-lift border border-rule overflow-hidden" role="dialog" aria-label="Quick actions">
+  <div class="w-[560px] rounded-2xl bg-card shadow-lift border border-rule overflow-hidden" role="dialog" aria-label="Quick actions">
     <div class="flex items-center gap-3 px-4 h-12 border-b border-rule">
       <Search size={16} class="text-ink-mute" />
       <input bind:this={input} bind:value={q} on:keydown={key} class="flex-1 outline-none text-[14px] bg-transparent" placeholder="Switch profile, change effect, go to a page…" />

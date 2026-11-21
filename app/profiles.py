@@ -30,6 +30,7 @@ DEFAULT_PROFILE = {
     "keymap": {"1": {}, "2": {}},
     "device": {"sleep": 3, "response": 1, "fn_swap": False},
     "game_mode": {"win": False, "alt_tab": False, "alt_f4": False},
+    "layers": {},
 }
 
 DEFAULT_SETTINGS = {
@@ -38,6 +39,9 @@ DEFAULT_SETTINGS = {
     "start_minimized": False,
     "close_to_tray": True,
     "launch_at_login": False,
+    "typing_stats": False,
+    "memory_saver": True,
+    "theme": "system",
 }
 
 
@@ -161,7 +165,7 @@ def apply_keymap(kb, profile: dict, store: Store) -> list[str]:
     for layer in ("1", "2"):
         for src, action in profile["keymap"].get(layer, {}).items():
             try:
-                send_action(kb, int(layer), int(src, 0) if isinstance(src, str) else int(src), action, store)
+                send_action(kb, int(layer), int(src, 16) if str(src).lower().startswith("0x") else int(src), action, store)
             except Exception as e:  # keep going, report at the end
                 warnings.append(f"{src}: {e}")
     return warnings

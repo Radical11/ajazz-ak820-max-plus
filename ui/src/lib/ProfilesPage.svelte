@@ -62,7 +62,7 @@
       {#each $profiles as p}
         <li>
           <button class="w-full rounded-xl px-3.5 py-2.5 text-left transition-colors
-                         {P?.id === p.id ? 'bg-white shadow-sm' : 'hover:bg-ink/[0.05]'}"
+                         {P?.id === p.id ? 'bg-card shadow-sm' : 'hover:bg-ink/[0.05]'}"
                   on:click={() => (sel = p.id)}>
             <div class="flex items-center justify-between">
               <span class="text-[13.5px] font-semibold">{p.name}</span>
@@ -94,7 +94,7 @@
         </p>
         <div class="flex flex-wrap gap-2 mb-3">
           {#each P.apps as a}
-            <span class="chip h-7 bg-white border border-rule text-ink"><AppWindow size={13} class="text-ink-mute" />{a}
+            <span class="chip h-7 bg-card border border-rule text-ink"><AppWindow size={13} class="text-ink-mute" />{a}
               <button class="ml-1 text-ink-faint hover:text-bad" aria-label="Remove {a}" on:click={() => setApps(P.apps.filter(x => x !== a))}><X size={13} /></button></span>
           {:else}
             <span class="text-[12.5px] text-ink-faint">No apps linked.</span>

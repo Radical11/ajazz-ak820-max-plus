@@ -59,6 +59,10 @@ class KeyboardRGB:
         self._io = threading.RLock()
         self._last_frame: bytes | None = None
         self._custom_active = False
+        self.battery: int | None = None
+        # Optional callable(bytes) -> bytes applied to every outgoing frame (lighting layers).
+        self.overlay = None
+        self.base_frame: bytes | None = None   # last frame before overlays
 
     # ── connection ─────────────────────────────────────────────────────
     def connect(self) -> None:
@@ -113,14 +117,25 @@ class KeyboardRGB:
                 self._write(p)
 
     def heartbeat(self) -> bytes | None:
-        """Send 0x0E and return the reply payload (or None)."""
+        """Send 0x0E, parse the reply (byte 5 = battery %, observed rising while charging)."""
         with self._io:
             self._write(P.heartbeat_packet())
             try:
                 r = self.device.read(65, 150)
             except Exception:
                 return None
-        return bytes(r) if r else None
+        r = bytes(r) if r else None
+        if r:
+            i = r.find(P.MAGIC + bytes([P.OP_HEARTBEAT]))
+            if i >= 0 and len(r) > i + 6:
+                b = r[i + 5]
+                self.battery = b if 0 < b <= 100 else None
+        return r
+
+    @property
+    def firmware(self) -> str | None:
+        rel = (self.info or {}).get("release_number")
+        return f"{rel >> 8:x}.{rel & 0xFF:02x}" if rel is not None else None
 
     # ── lighting ───────────────────────────────────────────────────────
     def init_custom_mode(self, force: bool = False) -> None:
@@ -136,6 +151,16 @@ class KeyboardRGB:
             raise ValueError(f"invalid mode id {mode}")
         self._write(P.mode_packet(mode, brightness, speed, direction, color, color2))
         self._custom_active = False
+        self.base_frame = None
+
+    @property
+    def custom_active(self) -> bool:
+        return self._custom_active
+
+    def refresh(self) -> None:
+        """Re-send the last base frame through the overlays (e.g. Caps Lock changed)."""
+        if self._custom_active and self.base_frame is not None:
+            self.send_frame(self.base_frame)
 
     def frame_bytes(self) -> bytes:
         out = bytearray(FRAME_BYTES)
@@ -150,6 +175,12 @@ class KeyboardRGB:
         return self.send_frame(self.frame_bytes(), force=force)
 
     def send_frame(self, rgb: bytes, force: bool = False, packet_delay: float = 0.0) -> bool:
+        self.base_frame = rgb
+        if self.overlay is not None:
+            try:
+                rgb = self.overlay(rgb)
+            except Exception:
+                pass
         if not force and rgb == self._last_frame:
             return False
         with self._io:

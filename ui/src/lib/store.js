@@ -35,6 +35,15 @@ export const paletteOpen = writable(false)
 
 export const activeName = derived(profile, p => p?.name ?? '—')
 
+// ── theme: light / dark / follow Windows ──────────────────────────────
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+function applyTheme(mode) {
+  const dark = mode === 'dark' || ((!mode || mode === 'system') && darkQuery.matches)
+  document.documentElement.classList.toggle('dark', dark)
+}
+settings.subscribe(s => applyTheme(s?.theme))
+darkQuery.addEventListener('change', () => applyTheme(get(settings)?.theme))
+
 export async function loadState() {
   const s = await api('get_state')
   status.set(s.status)
