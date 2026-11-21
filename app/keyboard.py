@@ -1,272 +1,220 @@
 """
-keyboard.py - KeyboardRGB controller for the Ajazz AK820 Max Plus
-Supports both connection modes:
-  USB wired:      1a2c:8fff
-  2.4 GHz dongle: 1a2c:a036
+keyboard.py - HID transport + high-level controller for the AJAZZ AK820 Max Plus.
+
+  USB wired:      1A2C:A036
+  2.4 GHz dongle: 1A2C:8FFF
+The vendor channel is the HID collection with usage page 0xFF02 (interface 0).
+All writes go through one lock, so effect threads, the UI and profile switching
+can share a single controller safely.
 """
 
-import hid
+from __future__ import annotations
+
 import json
 import os
+import threading
 import time
 
-VID = 0x1A2C
-# Known PIDs — USB wired and 2.4 GHz dongle share the same protocol
-KNOWN_PIDS = (0x8FFF, 0xA036)
-PID = KNOWN_PIDS[0]   # kept for backwards compatibility
-TARGET_INTERFACE = 0
-NUM_LEDS = 108
-FRAME_BYTES = NUM_LEDS * 3  # 324 bytes
+import hid
 
-MAGIC = bytes([0xAA, 0x55, 0xCC, 0x33])
-REPORT_LEN = 64
+from . import protocol as P
+from .storage import data_path, legacy_path
 
-HARDWARE_MODES = {
-    0:  {"name": "Horizontal Wave", "controls": "BSDC"},
-    1:  {"name": "Chaos",           "controls": "BS"},
-    2:  {"name": "Vertical Wave",   "controls": "BSDC"},
-    3:  {"name": "Beam",            "controls": "BSDC"},
-    4:  {"name": "Cycles",          "controls": "BS"},
-    5:  {"name": "Ripples",         "controls": "BSDC"},
-    6:  {"name": "Static",          "controls": "BC"},
-    7:  {"name": "Breathing",       "controls": "BSC"},
-    8:  {"name": "Cross Waves",     "controls": "BSC"},
-    9:  {"name": "Dual Wave",       "controls": "BSDC2"},  # C2 = dual color
-    10: {"name": "Key Glow",        "controls": "BSC"},
-    11: {"name": "Key Ripple",      "controls": "BSC"},
-    12: {"name": "Snake",           "controls": "BSC"},
-    13: {"name": "Spiral",          "controls": "BSDC"},
-    14: {"name": "Split Flow",      "controls": "BSC"},
-    15: {"name": "Meteor Shower",   "controls": "BSC"},
-    16: {"name": "Windmill",        "controls": "BSC"},
-    17: {"name": "Sine Wave",       "controls": "BSC"},
-    18: {"name": "Row Sweep",       "controls": "BSDC"},
-}
-
-COLORS = {
-    "red":    0x00,
-    "green":  0x01,
-    "blue":   0x02,
-    "yellow": 0x03,
-    "pink":   0x04,
-    "cyan":   0x05,
-    "white":  0x06,
-    "rgb":    0x07,
-}
+# Re-exported for older modules
+NUM_LEDS = P.NUM_LEDS
+FRAME_BYTES = P.FRAME_BYTES
+HARDWARE_MODES = P.HARDWARE_MODES
+COLORS = P.COLORS
 
 
-def _pkt(opcode: int, payload: bytes = b"") -> bytes:
-    body = MAGIC + bytes([opcode]) + payload
-    if len(body) > REPORT_LEN:
-        raise ValueError("Payload too long for a single HID report")
-    return body + bytes(REPORT_LEN - len(body))
+class DeviceNotFound(RuntimeError):
+    pass
 
 
-def find_hid_device(vid=VID, pids=KNOWN_PIDS, interface=TARGET_INTERFACE):
-    """
-    Scan for any HID device matching vid and any pid in pids
-    on the given interface number.
-    """
-    for device_dict in hid.enumerate(vid):
-        if device_dict['product_id'] in pids and device_dict['interface_number'] == interface:
-            return device_dict['path']
-    raise RuntimeError(
-        f"No HID device found for {vid:04x} with PIDs "
-        f"{', '.join(f'{p:04x}' for p in pids)} on interface {interface}."
-    )
+def find_device() -> dict:
+    """Return the hidapi info dict of the vendor collection, preferring wired."""
+    candidates = [d for d in hid.enumerate(P.VID) if d["product_id"] in P.KNOWN_PIDS]
+    if not candidates:
+        raise DeviceNotFound("AK820 Max Plus not found. Plug in the cable or the 2.4 GHz dongle.")
 
+    def rank(d):
+        vendor = d.get("usage_page") == P.VENDOR_USAGE_PAGE
+        iface0 = d.get("interface_number") == 0
+        wired = d["product_id"] == P.PID_WIRED
+        return (not vendor, not iface0, not wired)
+
+    best = sorted(candidates, key=rank)[0]
+    if best.get("usage_page") != P.VENDOR_USAGE_PAGE and best.get("interface_number") != 0:
+        raise DeviceNotFound("Keyboard found, but its control interface is unavailable.")
+    return best
 
 
 class KeyboardRGB:
-    """Thread-safe-ish controller for one keyboard. Call open/close explicitly or use as context manager."""
-
-    STATE_FILE = os.path.expanduser("~/.config/ajazz-ak820/rgb_state.json")
-    LAYOUT_FILE = os.path.join(os.path.dirname(__file__), "..", "test", "keyboard_rgb_keymap.json")
+    STATE_FILE = data_path("rgb_state.json")
 
     def __init__(self):
-        self.path: bytes | None = None
         self.device: hid.device | None = None
+        self.info: dict | None = None
         self.leds: list[tuple[int, int, int]] = [(0, 0, 0)] * NUM_LEDS
-        self._layout: dict[str, int] = {}
-        self._load_layout()
+        self._io = threading.RLock()
+        self._last_frame: bytes | None = None
+        self._custom_active = False
 
-    # ------------------------------------------------------------------
-    # Connection management
-    # ------------------------------------------------------------------
-
+    # ── connection ─────────────────────────────────────────────────────
     def connect(self) -> None:
-        if self.device is not None:
-            return
-        self.path = find_hid_device()
-        self.device = hid.device()
-        self.device.open_path(self.path)
+        with self._io:
+            if self.device is not None:
+                return
+            info = find_device()
+            dev = hid.device()
+            try:
+                dev.open_path(info["path"])
+            except (OSError, IOError) as e:
+                raise DeviceNotFound(f"Could not open the keyboard: {e}") from e
+            self.device, self.info = dev, info
+            self._last_frame = None
+            self._custom_active = False
 
     def disconnect(self) -> None:
-        if self.device is not None:
-            try:
-                self.device.close()
-            except Exception:
-                pass
+        with self._io:
+            if self.device is not None:
+                try:
+                    self.device.close()
+                except Exception:
+                    pass
             self.device = None
 
     def is_connected(self) -> bool:
         return self.device is not None
 
-    def __enter__(self):
-        self.connect()
-        return self
+    @property
+    def connection_type(self) -> str:
+        if not self.info:
+            return "none"
+        return "wired" if self.info["product_id"] == P.PID_WIRED else "wireless"
 
-    def __exit__(self, *_):
-        self.disconnect()
+    # ── low level ──────────────────────────────────────────────────────
+    def _write(self, packet: bytes) -> None:
+        with self._io:
+            if self.device is None:
+                raise OSError("keyboard not connected")
+            try:
+                n = self.device.write(b"\x00" + packet if os.name == "nt" else packet)
+            except (OSError, IOError, ValueError) as e:
+                self.disconnect()
+                raise OSError(str(e)) from e
+            if n is not None and n < 0:
+                self.disconnect()
+                raise OSError("write failed (device unplugged?)")
 
-    # ------------------------------------------------------------------
-    # Low-level I/O
-    # ------------------------------------------------------------------
+    def write_all(self, packets) -> None:
+        with self._io:
+            for p in packets:
+                self._write(p)
 
-    def _write(self, pkt: bytes) -> None:
-        assert len(pkt) == REPORT_LEN
-        # Windows requires a report ID (0x00) prefixed if no report ID is defined
-        if os.name == 'nt':
-            self.device.write(b'\x00' + pkt)
-        else:
-            self.device.write(pkt)
+    def heartbeat(self) -> bytes | None:
+        """Send 0x0E and return the reply payload (or None)."""
+        with self._io:
+            self._write(P.heartbeat_packet())
+            try:
+                r = self.device.read(65, 150)
+            except Exception:
+                return None
+        return bytes(r) if r else None
 
-    def _try_read(self, timeout: float = 0.2) -> bytes | None:
-        try:
-            # hidapi uses milliseconds for timeout
-            res = self.device.read(REPORT_LEN, int(timeout * 1000))
-            if res:
-                return bytes(res)
-        except Exception:
-            pass
-        return None
+    # ── lighting ───────────────────────────────────────────────────────
+    def init_custom_mode(self, force: bool = False) -> None:
+        if self._custom_active and not force:
+            return
+        self.write_all(P.custom_mode_packets())
+        self._custom_active = True
+        self._last_frame = None
 
-    # ------------------------------------------------------------------
-    # Mode initialisation
-    # ------------------------------------------------------------------
-
-    def init_custom_mode(self) -> None:
-        self._write(_pkt(0x07, bytes([0x17, 0x04, 0x03, 0x00, 0x07, 0x00])))
-        self._write(_pkt(0x0B))
-        self._write(_pkt(0x09))
-
-    # ------------------------------------------------------------------
-    # Frame I/O
-    # ------------------------------------------------------------------
-
-    def push_frame(self) -> None:
-        opcodes = (0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB)
-        for i, opcode in enumerate(opcodes):
-            chunk = bytearray()
-            for r, g, b in self.leds[i * 18 : (i + 1) * 18]:
-                chunk += bytes([r & 0xFF, g & 0xFF, b & 0xFF])
-            chunk += bytes(59 - len(chunk))
-            self._write(_pkt(opcode, bytes(chunk)))
-            time.sleep(0.004)
-
-    def send_frame(self, led_buffer: bytes, packet_delay: float = 0.0) -> None:
-        if len(led_buffer) != FRAME_BYTES:
-            raise ValueError(f"Expected {FRAME_BYTES} bytes, got {len(led_buffer)}")
-        buf = bytearray(led_buffer)
-        opcodes = (0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB)
-        for i, opcode in enumerate(opcodes):
-            chunk = buf[i * 54 : (i + 1) * 54]
-            chunk += bytes(59 - len(chunk))
-            self._write(_pkt(opcode, bytes(chunk)))
-            if packet_delay > 0:
-                time.sleep(packet_delay)
-
-    def send_heartbeat(self) -> None:
-        self._write(_pkt(0x0E))
-
-    # ------------------------------------------------------------------
-    # Hardware animation modes
-    # ------------------------------------------------------------------
-
-    def set_hardware_mode(
-        self,
-        mode: int,
-        brightness: int = 4,
-        speed: int = 2,
-        direction: int = 0,
-        color: int = 0x07,
-        color2: int = 0x07,
-    ) -> None:
+    def set_hardware_mode(self, mode: int, brightness: int = 4, speed: int = 2,
+                          direction: int = 0, color: int = 7, color2: int = 7) -> None:
         if mode not in HARDWARE_MODES:
-            raise ValueError(f"Invalid mode id {mode}")
-        packet = bytearray(REPORT_LEN)
-        packet[0:4] = MAGIC
-        packet[4] = 0x07
-        packet[5] = mode
-        packet[6] = max(0, min(4, brightness))
-        packet[7] = max(0, min(4, speed))
-        packet[8] = max(0, min(1, direction))
-        packet[9] = color & 0xFF
-        packet[10] = color2 & 0xFF   # secondary color for Dual Wave
-        self._write(bytes(packet))
+            raise ValueError(f"invalid mode id {mode}")
+        self._write(P.mode_packet(mode, brightness, speed, direction, color, color2))
+        self._custom_active = False
 
-    # ------------------------------------------------------------------
-    # LED helpers
-    # ------------------------------------------------------------------
+    def frame_bytes(self) -> bytes:
+        out = bytearray(FRAME_BYTES)
+        for i, (r, g, b) in enumerate(self.leds):
+            out[i * 3] = r & 0xFF
+            out[i * 3 + 1] = g & 0xFF
+            out[i * 3 + 2] = b & 0xFF
+        return bytes(out)
 
-    def set_all(self, rgb: tuple[int, int, int]) -> None:
-        self.leds = [rgb] * NUM_LEDS
+    def push_frame(self, force: bool = False) -> bool:
+        """Send self.leds. Skips identical frames unless force. Returns True if sent."""
+        return self.send_frame(self.frame_bytes(), force=force)
 
-    def set_led(self, index: int, rgb: tuple[int, int, int]) -> None:
-        if 0 <= index < NUM_LEDS:
-            self.leds[index] = rgb
-
-    def set_key(self, key_name: str, rgb: tuple[int, int, int]) -> bool:
-        """Set a key by its label (e.g. 'ESC', 'SPACE'). Returns False if not found."""
-        idx = self._layout.get(key_name.upper())
-        if idx is None:
+    def send_frame(self, rgb: bytes, force: bool = False, packet_delay: float = 0.0) -> bool:
+        if not force and rgb == self._last_frame:
             return False
-        self.set_led(idx, rgb)
+        with self._io:
+            for p in P.frame_packets(rgb):
+                self._write(p)
+                if packet_delay:
+                    time.sleep(packet_delay)
+            self._last_frame = rgb
         return True
+
+    def set_all(self, rgb) -> None:
+        self.leds = [tuple(rgb)] * NUM_LEDS
+
+    def set_led(self, index: int, rgb) -> None:
+        if 0 <= index < NUM_LEDS:
+            self.leds[index] = tuple(rgb)
 
     def clear(self) -> None:
         self.set_all((0, 0, 0))
 
     def all_off(self) -> None:
         self.clear()
-        self.push_frame()
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
+        self.push_frame(force=True)
 
     def save_to_hardware(self) -> None:
-        """Persist current custom frame to keyboard's on-board flash."""
-        self._write(_pkt(0x0A))
-        time.sleep(0.01)
-        self._write(_pkt(0x0A))
+        self._write(P.save_packet())
 
+    # ── keys / macros / settings ───────────────────────────────────────
+    def assign_key(self, layer: int, src_hid: int, dst: int) -> None:
+        self._write(P.key_packet(layer, src_hid, dst))
+
+    def assign_macro(self, layer: int, src_hid: int, events: list[dict], repeat: int = 1) -> None:
+        self.write_all(P.macro_packets(layer, src_hid, events, repeat))
+
+    def reset_keymap(self) -> None:
+        self._write(P.reset_keys_packet())
+
+    def set_sleep(self, option: int) -> None:
+        self._write(P.sleep_packet(option))
+
+    def set_response(self, gear: int) -> None:
+        self._write(P.response_packet(gear))
+
+    def set_fn_mode(self, swapped: bool) -> None:
+        self._write(P.fn_mode_packet(swapped))
+
+    # ── persistence of the last custom frame ───────────────────────────
     def save_state(self) -> None:
-        os.makedirs(os.path.dirname(self.STATE_FILE), exist_ok=True)
-        with open(self.STATE_FILE, "w") as f:
-            json.dump(self.leds, f)
+        try:
+            with open(self.STATE_FILE, "w") as f:
+                json.dump(self.leds, f)
+        except OSError:
+            pass
 
     def load_state(self) -> bool:
-        try:
-            with open(self.STATE_FILE) as f:
-                self.leds = [tuple(c) for c in json.load(f)]
-            return True
-        except (OSError, json.JSONDecodeError):
-            return False
-
-    def _load_layout(self) -> None:
-        path = os.path.realpath(self.LAYOUT_FILE)
-        try:
-            with open(path) as f:
-                raw = json.load(f)
-            # keymap file is {str(index): label} — invert to {label: index}
-            self._layout = {label: int(idx) for idx, label in raw.items()}
-        except (OSError, json.JSONDecodeError):
-            self._layout = {}
-
-    def get_layout(self) -> dict[str, int]:
-        return dict(self._layout)
+        for path in (self.STATE_FILE, legacy_path("rgb_state.json")):
+            try:
+                with open(path) as f:
+                    leds = [tuple(c) for c in json.load(f)]
+                if len(leds) == NUM_LEDS:
+                    self.leds = leds
+                    return True
+            except (OSError, ValueError, TypeError):
+                continue
+        return False
 
     def get_leds_as_hex(self) -> list[str]:
-        """Return current LED state as a list of '#rrggbb' strings for the UI."""
         return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in self.leds]

@@ -1,70 +1,96 @@
-import { writable } from 'svelte/store'
+import { writable, derived, get } from 'svelte/store'
 
-// ── Connection ──────────────────────────────────────────────────────────
-export const connected    = writable(false)
-export const connecting   = writable(false)
-export const statusError  = writable('')
-
-// ── Active tab ─────────────────────────────────────────────────────────
-// 'custom' | 'modes' | 'audio'
-export const activeTab = writable('custom')
-
-// ── LED state (108 hex strings) ────────────────────────────────────────
-export const NUM_LEDS = 108
-const _defaultLeds = () => Array(NUM_LEDS).fill('#000000')
-export const leds = writable(_defaultLeds())
-
-// ── Selected LED indices (Set) ─────────────────────────────────────────
-export const selectedLeds = writable(new Set())
-
-// ── Colour picker value ────────────────────────────────────────────────
-export const pickerColor = writable('#7c6bff')
-
-// ── Hardware modes ─────────────────────────────────────────────────────
-export const hardwareModes   = writable([])
-export const hardwareColors  = writable([])
-export const modeSettings    = writable({
-  mode_id:    0,
-  brightness: 4,
-  speed:      2,
-  direction:  0,
-  color_name: 'rgb',
-  color2_name: 'blue',
-})
-
-// ── Audio ───────────────────────────────────────────────────────────────
-export const audioDevices    = writable([])
-export const audioRunning    = writable(false)
-export const audioMode       = writable('volume')   // 'volume' | 'spectrum'
-export const audioDeviceId   = writable(null)
-export const audioConfig     = writable({
-  sensitivity:       5.0,
-  noise_gate:        0.005,
-  smoothing_falloff: 0.82,
-  bass_sensitivity:  150,
-  mid_sensitivity:   250,
-  treble_sensitivity:350,
-  bass_color:        [254, 30, 30],
-  mid_color:         [30, 220, 30],
-  treble_color:      [30, 80, 254],
-})
-
-// ── Toast notifications ─────────────────────────────────────────────────
-export const toasts = writable([])
-
-let _toastId = 0
-export function toast(message, type = 'info', duration = 3000) {
-  const id = ++_toastId
-  toasts.update(t => [...t, { id, message, type }])
-  setTimeout(() => toasts.update(t => t.filter(x => x.id !== id)), duration)
-}
-
-// ── pywebview bridge helper ─────────────────────────────────────────────
+// ── bridge ────────────────────────────────────────────────────────────
 export async function api(method, ...args) {
-  if (!window.pywebview?.api) {
-    throw new Error('pywebview not ready')
-  }
-  const result = await window.pywebview.api[method](...args)
-  if (!result.ok) throw new Error(result.error ?? 'Unknown error')
-  return result
+  if (!window.pywebview?.api?.[method]) throw new Error('The app backend is still starting')
+  const res = await window.pywebview.api[method](...args)
+  if (!res?.ok) throw new Error(res?.error ?? 'Something went wrong')
+  return res
 }
+
+export function waitForBackend() {
+  return new Promise(resolve => {
+    if (window.pywebview?.api?.get_state) return resolve()
+    window.addEventListener('pywebviewready', () => resolve(), { once: true })
+    const id = setInterval(() => { if (window.pywebview?.api?.get_state) { clearInterval(id); resolve() } }, 100)
+  })
+}
+
+// ── app state ─────────────────────────────────────────────────────────
+export const NUM_LEDS = 108
+export const ready = writable(false)
+export const page = writable('lighting')          // lighting | keys | macros | profiles | device
+export const status = writable({ connected: false, connection: 'none', studio: null, error: '' })
+export const settings = writable({})
+export const profiles = writable([])
+export const profile = writable(null)             // active profile object
+export const macros = writable([])
+export const modes = writable([])
+export const meta = writable({ sleep_options: {}, response_options: {}, max_macro_events: 27, hook_available: true })
+export const leds = writable(Array(NUM_LEDS).fill('#000000'))
+export const audioDevices = writable([])
+export const audioConfig = writable({})
+export const pressed = writable(new Set())        // HID codes currently held (key tester)
+export const paletteOpen = writable(false)
+
+export const activeName = derived(profile, p => p?.name ?? '—')
+
+export async function loadState() {
+  const s = await api('get_state')
+  status.set(s.status)
+  settings.set(s.settings)
+  profiles.set(s.profiles)
+  profile.set(s.profile)
+  macros.set(s.macros)
+  modes.set(s.modes)
+  meta.set({ sleep_options: s.sleep_options, response_options: s.response_options,
+             max_macro_events: s.max_macro_events, hook_available: s.hook_available, colors: s.colors })
+  audioDevices.set(s.audio_devices)
+  audioConfig.set(s.audio)
+  if (s.profile?.lighting?.kind === 'custom') leds.set(s.profile.lighting.leds)
+  else leds.set(s.leds)
+  ready.set(true)
+}
+
+// events pushed from Python
+window.addEventListener('ak:status', e => status.set(e.detail))
+window.addEventListener('ak:profile', e => {
+  profile.set(e.detail.profile)
+  status.set(e.detail.status)
+  const p = e.detail.profile
+  if (p?.lighting?.kind === 'custom') leds.set(p.lighting.leds)
+  toast(`Switched to ${p.name}`, 'info')
+})
+window.addEventListener('ak:key', e => {
+  const { hid, down } = e.detail
+  if (hid == null) return
+  pressed.update(s => { const n = new Set(s); down ? n.add(hid) : n.delete(hid); return n })
+})
+
+// ── run an action with a toast on failure ─────────────────────────────
+export async function run(method, args = [], { success, quiet } = {}) {
+  try {
+    const res = await api(method, ...args)
+    if (res.profile) profile.set(res.profile)
+    if (res.profiles) profiles.set(res.profiles)
+    if (res.macros) macros.set(res.macros)
+    if (res.status) status.set(res.status)
+    if (res.warnings?.length) toast(`Some keys couldn't be applied: ${res.warnings.join(', ')}`, 'warn', 5000)
+    if (success) toast(success, 'ok')
+    return res
+  } catch (e) {
+    if (!quiet) toast(e.message, 'bad', 5000)
+    throw e
+  }
+}
+
+// ── toasts ────────────────────────────────────────────────────────────
+export const toasts = writable([])
+let tid = 0
+export function toast(message, kind = 'info', ms = 2800) {
+  const id = ++tid
+  toasts.update(t => [...t.slice(-3), { id, message, kind }])
+  setTimeout(() => toasts.update(t => t.filter(x => x.id !== id)), ms)
+}
+
+export function profileSnapshot() { return get(profile) }

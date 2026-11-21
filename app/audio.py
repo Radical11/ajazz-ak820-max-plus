@@ -54,6 +54,7 @@ class AudioEngine:
         self._current_fft = np.zeros((_DEFAULTS["block_size"] // 2) + 1)
         self._current_rms: float = 0.0
         self.running = False
+        self.last_error = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -68,10 +69,22 @@ class AudioEngine:
     def get_devices(self) -> list[dict]:
         if not SOUNDDEVICE_AVAILABLE:
             return []
-        devs = []
+        # One entry per physical device: prefer the WASAPI host API on Windows.
+        devs, seen = [], set()
+        try:
+            apis = sd.query_hostapis()
+            pref = next((i for i, h in enumerate(apis) if "WASAPI" in h["name"]), None)
+        except Exception:
+            pref = None
         for i, d in enumerate(sd.query_devices()):
-            if d["max_input_channels"] > 0:
-                devs.append({"id": i, "name": d["name"]})
+            if d["max_input_channels"] <= 0:
+                continue
+            if pref is not None and d["hostapi"] != pref:
+                continue
+            if d["name"] in seen:
+                continue
+            seen.add(d["name"])
+            devs.append({"id": i, "name": d["name"]})
         return devs
 
     def start(self, mode: str, keyboard, device_id: int | None = None) -> bool:
@@ -133,6 +146,8 @@ class AudioEngine:
 
                 while not self._stop_event.is_set():
                     loop_start = time.time()
+                    with self._lock:
+                        cfg = dict(self._cfg)  # live tuning from the UI
 
                     if mode == "volume":
                         led_buffer = self._build_volume_frame(cfg, smoothed)
@@ -144,21 +159,14 @@ class AudioEngine:
                     except OSError:
                         break  # keyboard disconnected
 
-                    now = time.time()
-                    if now - last_heartbeat > 5.0:
-                        try:
-                            keyboard.send_heartbeat()
-                        except OSError:
-                            break
-                        last_heartbeat = now
 
                     elapsed = time.time() - loop_start
                     sleep_for = frame_time - elapsed
                     if sleep_for > 0:
                         self._stop_event.wait(sleep_for)
 
-        except Exception:
-            pass
+        except Exception as e:
+            self.last_error = str(e)
         finally:
             self.running = False
 

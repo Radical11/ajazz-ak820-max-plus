@@ -1,96 +1,63 @@
-# Ajazz AK820 Max Plus — RGB Control
+# AK820 Studio
 
-A Linux desktop app for the Ajazz AK820 Max Plus keyboard. The official software is Windows-only with no public protocol documentation — this project reverse-engineered the USB HID protocol and built a native desktop app around it.
-
-![Per-Key RGB](screenshots/2026-08-31T14:10:53,934700483+05:30.png)
-
----
+AK820 Studio is a lighter replacement for the official AJAZZ software for the AJAZZ AK820 Max Plus keyboard on Windows. The USB HID protocol was reverse-engineered from the keyboard; see [PROTOCOL.md](PROTOCOL.md) for the full specification.
 
 ## Features
 
-- **Per-key RGB** — click or drag to paint individual keys, fill all, clear
-- **Hardware effects** — 19 animation modes (Horizontal Wave, Breathing, Spiral, etc.) with brightness, speed, direction, and color controls
-- **Audio reactive** — real-time FFT-driven lighting via microphone or audio monitor:
-  - *Volume mode* — whole-keyboard brightness tracks overall volume
-  - *Spectrum mode* — Bass / Mid / Treble frequency bands each drive a separate LED zone
-
-![Effects Panel](screenshots/2026-08-31T14:11:07,106785114+05:30.png)
-
-![Audio Reactive](screenshots/2026-08-31T14:11:20,676500563+05:30.png)
-
----
-
-## Stack
-
-| Layer | Technology |
-|---|---|
-| Desktop wrapper | PyWebView (Qt backend via PyQt6) |
-| Frontend | Svelte + Tailwind CSS + Lucide icons |
-| System tray | pystray + Pillow |
-| Audio capture | sounddevice + NumPy (FFT) |
-| HID communication | Raw `/dev/hidraw*` via Python `os` module |
-
----
+- **Lighting**: 19 on-board effects and 6 effects drawn by the app. Per-key painting is saved to the keyboard. Live music, typing-heat, and system-monitor lighting run while the app is open.
+- **Keys**: remap the base and Fn layers, assign media and app keys, shortcuts, or macros, and disable keys.
+- **Macros**: record with timing, edit steps, and store up to 27 steps on the keyboard.
+- **Profiles**: unlimited profiles with import and export. Profiles can switch automatically per app or from the tray.
+- **Device**: response time, sleep timer, F-row mode, game mode (blocks Win, Alt+Tab, and Alt+F4), and a key tester with chatter detection.
+- **Navigation**: Ctrl+K opens quick actions; Ctrl+1 to Ctrl+5 switch pages.
 
 ## Requirements
 
-- Linux (tested on Wayland / Hyprland)
+- Windows 10 or 11
 - Python 3.11+
 - Node.js 18+
-- PyQt6 installed system-wide (`python-pyqt6` package)
-
----
+- Microsoft Edge WebView2 runtime (preinstalled on Windows 11)
 
 ## Install
 
-```bash
-./install.sh
-```
-
-The script:
-1. Creates a Python venv with `--system-site-packages` (needed to access system PyQt6)
-2. Installs Python deps (`pywebview`, `pystray`, `numpy`, `sounddevice`, etc.)
-3. Runs `npm install` and builds the Svelte frontend
-4. Installs a udev rule so the keyboard is accessible without root (`/etc/udev/rules.d/99-ajazz-ak820.rules`)
-
-Re-plug the keyboard after the first install.
-
----
+Run `install.bat`. It creates a virtual environment, installs the Python packages, and builds the UI. Run it again after updating the project.
 
 ## Run
 
-```bash
-./run.sh
-
-# With WebKit inspector (right-click → Inspect Element)
-./run.sh --debug
+```
+run.bat            start in the background (tray icon, no console window)
+run.bat --minimized  start hidden in the tray
+run.bat --debug    run with a console and the web inspector enabled
 ```
 
----
+## Data location
 
-## Protocol
+Profiles, macros, and settings are stored in `%APPDATA%\AK820Studio`.
 
-See [`PROTOCOL.md`](PROTOCOL.md) for a full specification of the reverse-engineered USB HID protocol — packet structure, opcodes, LED index map, hardware mode table, and audio reactive implementation details.
-
----
-
-## Project Structure
+## Project structure
 
 ```
-app/
-  keyboard.py     HID controller
-  audio.py        FFT audio engine
-  api.py          PyWebView JS bridge
-  tray.py         System tray icon
-main.py           Entry point
-ui/
-  src/
-    App.svelte
-    lib/
-      KeyboardVisualizer.svelte
-      ModesPanel.svelte
-      AudioPanel.svelte
-      store.js
-test/             Original reverse-engineering scripts
-PROTOCOL.md       USB HID protocol spec
+app/protocol.py       Packet construction
+app/keyboard.py       HID transport
+app/api.py            UI bridge (pywebview JS API)
+app/profiles.py       Profile storage and switching
+app/winhooks.py       Global key hook
+app/appwatch.py       Foreground app detection
+app/audio.py          Audio capture and FFT for music lighting
+app/heatmap.py        Typing-heat lighting
+app/sysmon.py         System-monitor lighting
+app/custom_effects.py App-drawn lighting effects
+app/tray.py           System tray icon
+app/layout.py         Keyboard layout helpers
+app/storage.py        Data directory handling
+ui/src/lib/*.svelte   UI pages and components
+ui/src/lib/layout.js  Key layout, generated from the vendor layout
+main.py               Entry point
+PROTOCOL.md           USB HID protocol specification
 ```
+
+## Notes
+
+- Close the official AJAZZ app and turn off its Auto Run setting. Both apps talking to the keyboard can cause conflicts.
+- The keyboard stores key remaps, macros, and settings itself, so they keep working without the app. App-drawn and live lighting need AK820 Studio running.
+- The 2.4 GHz dongle (1A2C:8FFF) uses the same protocol but has not been tested.
