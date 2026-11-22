@@ -1,41 +1,17 @@
-# Python
-venv/
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
-*.so
-
-# App state
-~/.config/ajazz-ak820/
-
 # Node
 ui/node_modules/
 ui/dist/
 
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Packaging outputs
-dist-app/
-build-app/
-dist-installer/
-
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# Local tooling
 .claude/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

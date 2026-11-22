@@ -1,6 +1,6 @@
 // Web backend: talks to the keyboard through WebHID (Chrome / Edge), keeps profiles,
 // macros and settings in localStorage, and runs live lighting in the page.
-// Implements the same method names and result shapes as the desktop (Python) bridge.
+// The desktop (Tauri) backend extends this class.
 import * as P from './protocol.js'
 import { SOFTWARE_EFFECTS, createEffect, createHeat, ambientFrame, spectrumFrame } from './effects.js'
 import { KEY_BY_HID, KEYS } from '../layout.js'

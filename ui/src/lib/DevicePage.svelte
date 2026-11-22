@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte'
   import { Gamepad2, Timer, Zap, Activity, Power, BarChart3, Cpu, ScanEye, Moon } from 'lucide-svelte'
   import KeyboardStage from './KeyboardStage.svelte'
-  import { profile, settings, meta, pressed, status, platform, run, api, toast } from './store.js'
+  import { profile, settings, meta, pressed, status, run, api, toast } from './store.js'
   import { KEY_BY_HID, KEYS } from './layout.js'
   import { HID_NAMES } from './keycodes.js'
 
@@ -205,7 +205,6 @@
   </div>
   {/if}
 
-  {#if $platform !== 'desktop' || $meta.jsBackend}
   <div>
     <h2 class="text-[14px] font-semibold flex items-center gap-2 mb-1"><Moon size={16} class="text-lav" /> Lighting schedule</h2>
     <p class="text-[12.5px] text-ink-mute mb-4">Dim the lights at night and turn them off when you step away. They come back as soon as you touch the keyboard or mouse.</p>
@@ -233,7 +232,6 @@
       </div>
     </div>
   </div>
-  {/if}
 
   <div class="grid grid-cols-2 gap-10">
     <div>

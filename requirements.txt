@@ -1,9 +1,0 @@
-pywebview>=5.1
-pythonnet>=3.0 ; sys_platform == "win32"
-hidapi>=0.14
-pystray>=0.19
-Pillow>=10.0
-numpy>=1.26
-sounddevice>=0.4.6
-psutil>=5.9
-soundcard>=0.4

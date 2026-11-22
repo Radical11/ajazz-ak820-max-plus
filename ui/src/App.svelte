@@ -124,7 +124,7 @@
       {#if failed}
         <div class="p-10 max-w-lg">
           <h2 class="text-lg font-semibold mb-2">The backend didn't start</h2>
-          <p class="text-ink-mute">{failed}. Close the app and start it again with run.bat; add --debug to see details.</p>
+          <p class="text-ink-mute">{failed}. Close AK820 Studio and open it again.</p>
         </div>
       {:else if !$ready}
         <div class="p-10 text-ink-mute">Starting…</div>
