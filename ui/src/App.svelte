@@ -1,228 +1,150 @@
 <script>
   import { onMount } from 'svelte'
-  import { Keyboard, Sparkles, Music2, Save, Eraser, PaintBucket,
-           Check, AlertTriangle, Info, Zap, ZapOff } from 'lucide-svelte'
+  import { Lightbulb, Keyboard, Repeat, Layers, SlidersHorizontal, Usb, Wifi, Unplug, Command, Gamepad } from 'lucide-svelte'
+  import { ready, page, status, profile, profiles, toasts, paletteOpen, meta, loadState, waitForBackend, run } from './lib/store.js'
+  import GamesPage from './lib/GamesPage.svelte'
+  import LightingPage from './lib/LightingPage.svelte'
+  import KeysPage from './lib/KeysPage.svelte'
+  import MacrosPage from './lib/MacrosPage.svelte'
+  import ProfilesPage from './lib/ProfilesPage.svelte'
+  import DevicePage from './lib/DevicePage.svelte'
+  import CommandPalette from './lib/CommandPalette.svelte'
 
-  import KeyboardVisualizer from './lib/KeyboardVisualizer.svelte'
-  import ModesPanel         from './lib/ModesPanel.svelte'
-  import AudioPanel         from './lib/AudioPanel.svelte'
-
-  import {
-    connected, connecting, statusError,
-    activeTab, leds, pickerColor,
-    hardwareModes, hardwareColors, audioDevices, audioRunning,
-    toast, toasts, api
-  } from './lib/store.js'
-
-  let vizRef
-
-  async function waitForPywebview() {
-    return new Promise(resolve => {
-      if (window.pywebview?.api) { resolve(); return }
-      const id = setInterval(() => { if (window.pywebview?.api) { clearInterval(id); resolve() } }, 100)
-    })
-  }
+  const NAV = [
+    { id: 'lighting', label: 'Lighting', icon: Lightbulb, hint: 'Effects, per-key colour and live studio modes' },
+    { id: 'keys',     label: 'Keys',     icon: Keyboard,  hint: 'Remap keys on the base and Fn layers' },
+    { id: 'macros',   label: 'Macros',   icon: Repeat,    hint: 'Record and edit key sequences' },
+    { id: 'profiles', label: 'Profiles', icon: Layers,    hint: 'Switch setups, link them to apps' },
+    { id: 'device',   label: 'Device',   icon: SlidersHorizontal, hint: 'Sleep, response time, game mode, key test' },
+    { id: 'play',     label: 'Play',     icon: Gamepad,   hint: 'Games played on the keyboard lights' },
+  ]
+  let failed = ''
 
   onMount(async () => {
-    await waitForPywebview()
-    try { const r = await api('get_hardware_modes'); hardwareModes.set(r.modes); hardwareColors.set(r.colors) } catch(_) {}
-    try { const r = await api('get_audio_devices'); audioDevices.set(r.devices) } catch(_) {}
-    window.addEventListener('kb-connected', e => { connected.set(true); leds.set(e.detail.leds) })
-    try {
-      connecting.set(true)
-      const res = await api('connect')
-      connected.set(true); leds.set(res.leds)
-    } catch(e) { statusError.set(e.message) }
-    finally { connecting.set(false) }
+    await waitForBackend()
+    try { await loadState() } catch (e) { failed = e.message }
   })
 
-  async function toggleConnect() {
-    if ($connected) {
-      try { await api('disconnect'); connected.set(false) } catch(e) { toast(e.message,'error') }
-    } else {
-      try {
-        connecting.set(true); statusError.set('')
-        const res = await api('connect')
-        connected.set(true); leds.set(res.leds)
-      } catch(e) { statusError.set(e.message); toast(e.message,'error') }
-      finally { connecting.set(false) }
-    }
+  function onKey(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen.update(v => !v) }
+    if (e.ctrlKey && /^[1-6]$/.test(e.key)) { e.preventDefault(); page.set(NAV[+e.key - 1].id) }
   }
 
-  const TABS = [
-    { id:'custom', label:'Per-Key',  icon:Keyboard  },
-    { id:'modes',  label:'Effects',  icon:Sparkles  },
-    { id:'audio',  label:'Audio',    icon:Music2    },
-  ]
-
-  const TOAST_ICON = { success:Check, error:AlertTriangle, warn:AlertTriangle, info:Info }
-  const TOAST_CLS  = {
-    success: 'text-success border-success/20',
-    error:   'text-danger  border-danger/20',
-    warn:    'text-warn    border-warn/20',
-    info:    'text-white/75 border-white/10',
-  }
+  $: conn = $status.connected ? ($status.connection === 'wireless' ? 'Wireless' : 'Wired') : 'Not connected'
 </script>
 
-<div class="flex h-screen overflow-hidden bg-black text-white">
+<svelte:window on:keydown={onKey} />
 
-  <!-- ── Sidebar ─────────────────────────────────────────────────── -->
-  <aside class="w-52 shrink-0 flex flex-col border-r border-white/10 py-5">
-
-    <!-- Logo / title -->
-    <div class="px-5 mb-6">
-      <p class="text-[11px] font-semibold tracking-widest text-white/40 uppercase">AK820</p>
-      <p class="text-base font-semibold tracking-tight leading-tight mt-0.5">RGB Control</p>
+<div class="h-full flex">
+  <!-- rail -->
+  <nav class="w-[212px] shrink-0 flex flex-col px-3 pt-5 pb-4 border-r border-rule bg-sheet/60" aria-label="Sections">
+    <div class="px-2.5 mb-7">
+      <div class="font-display text-[19px] font-semibold leading-none">AK820 Studio</div>
+      <div class="text-[12px] text-ink-mute mt-1.5">AJAZZ AK820 Max Plus</div>
     </div>
 
-    <!-- Nav -->
-    <nav class="flex flex-col gap-0.5 px-2 flex-1">
-      {#each TABS as tab}
-        <button
-          class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
-                 transition-all duration-100 text-left w-full group"
-          class:active-tab={$activeTab === tab.id}
-          class:inactive-tab={$activeTab !== tab.id}
-          on:click={() => activeTab.set(tab.id)}
-        >
-          <svelte:component this={tab.icon} size={15}
-            class="{$activeTab === tab.id ? 'text-white' : 'text-white/50 group-hover:text-white/80'} transition-colors" />
-          <span>{tab.label}</span>
-        </button>
+    <ul class="flex flex-col gap-0.5">
+      {#each NAV as n, i}
+        <li>
+          <button
+            class="w-full flex items-center gap-3 h-9 px-2.5 rounded-lg text-[13.5px] transition-colors
+                   {$page === n.id ? 'bg-card text-ink font-semibold shadow-sm' : 'text-ink-soft hover:bg-ink/[0.05]'}"
+            aria-current={$page === n.id ? 'page' : undefined}
+            title="{n.hint} (Ctrl+{i + 1})"
+            on:click={() => page.set(n.id)}
+          >
+            <svelte:component this={n.icon} size={17} strokeWidth={$page === n.id ? 2.2 : 1.8}
+              class={$page === n.id ? 'text-lav' : ''} />
+            {n.label}
+          </button>
+        </li>
       {/each}
-    </nav>
+    </ul>
 
-    <!-- Connection status -->
-    <div class="px-3 mt-4">
-      <button
-        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
-               border transition-all duration-150 group
-               {$connected
-                 ? 'border-success/25 bg-success/5 text-success hover:bg-success/10'
-                 : 'border-white/10 text-white/55 hover:text-white/80 hover:border-white/20'}"
-        on:click={toggleConnect}
-        disabled={$connecting}
-      >
-        {#if $connecting}
-          <span class="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse shrink-0"></span>
-          <span class="text-xs">Connecting…</span>
-        {:else if $connected}
-          <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0 shadow-[0_0_6px_#22c55e]"></span>
-          <span class="text-xs font-medium flex-1">Connected</span>
-          <ZapOff size={12} class="opacity-0 group-hover:opacity-70 transition-opacity shrink-0"/>
-        {:else}
-          <span class="w-1.5 h-1.5 rounded-full bg-white/30 shrink-0"></span>
-          <span class="text-xs flex-1">Disconnected</span>
-          <Zap size={12} class="opacity-0 group-hover:opacity-70 transition-opacity shrink-0"/>
-        {/if}
+    <div class="mt-auto flex flex-col gap-3 px-1">
+      <button class="flex items-center justify-between h-8 px-2.5 rounded-lg border border-rule bg-card text-[12.5px] text-ink-mute hover:border-ink-faint"
+              on:click={() => paletteOpen.set(true)}>
+        <span class="flex items-center gap-2"><Command size={14} /> Quick actions</span>
+        <kbd class="text-[11px] text-ink-faint">Ctrl K</kbd>
       </button>
-    </div>
 
-  </aside>
-
-  <!-- ── Main content ─────────────────────────────────────────────── -->
-  <main class="flex-1 overflow-hidden flex flex-col min-w-0">
-
-    <!-- Per-Key tab -->
-    {#if $activeTab === 'custom'}
-      <div class="flex flex-col h-full">
-
-        <!-- Toolbar -->
-        <div class="flex items-center gap-2 px-6 h-12 border-b border-white/10 shrink-0">
-
-          <!-- Color swatch + hex -->
-          <label class="flex items-center gap-2 cursor-pointer group" title="Pick color">
-            <div class="relative w-6 h-6 rounded overflow-hidden ring-1 ring-white/20
-                        group-hover:ring-white/40 transition-all shadow-[0_0_8px_var(--glow)]"
-                 style="background:{$pickerColor}; --glow:{$pickerColor}40">
-              <input type="color" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                     bind:value={$pickerColor}/>
-            </div>
-            <span class="font-mono text-xs text-white/60 group-hover:text-white/90 transition-colors tracking-wide">
-              {$pickerColor.toUpperCase()}
+      <div class="rounded-xl px-3 py-2.5 bg-card border border-rule">
+        <div class="flex items-center gap-2 text-[12.5px] font-medium">
+          {#if $status.connected}
+            <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full rounded-full bg-ok opacity-40 animate-ping"></span><span class="relative h-2 w-2 rounded-full bg-ok"></span></span>
+            {#if $status.connection === 'wireless'}<Wifi size={14} class="text-ink-mute" />{:else}<Usb size={14} class="text-ink-mute" />{/if}
+          {:else}
+            <Unplug size={14} class="text-bad" />
+          {/if}
+          {conn}
+        </div>
+        {#if $status.connected && $status.battery != null}
+          <div class="flex items-center gap-2 mt-2" title="Battery level reported by the keyboard{$status.connection === 'wired' ? ' (charging over USB)' : ''}">
+            <span class="relative w-7 h-3.5 rounded-[3px] border border-ink-faint p-[1.5px]">
+              <span class="block h-full rounded-[1px] {$status.battery <= 15 ? 'bg-bad' : 'bg-ok'}" style="width:{$status.battery}%"></span>
             </span>
-          </label>
-
-          <div class="w-px h-4 bg-white/10 mx-1"></div>
-
-          <button class="btn-ghost" on:click={() => vizRef?.fillAll()}>
-            <PaintBucket size={12}/>Fill all
-          </button>
-          <button class="btn-ghost" on:click={() => vizRef?.clearAll()}>
-            <Eraser size={12}/>Clear
-          </button>
-
-          <div class="flex-1"></div>
-
-          <span class="text-[10px] text-white/40 mr-2 hidden lg:block">
-            Left-click paint · Right-click sample
-          </span>
-
-          <button class="btn-primary gap-2" on:click={() => vizRef?.saveToHardware()} disabled={!$connected}>
-            <Save size={12}/>Save to keyboard
-          </button>
-        </div>
-
-        <!-- Keyboard canvas -->
-        <div class="flex-1 overflow-auto flex items-center justify-center p-10">
-          <KeyboardVisualizer bind:this={vizRef}/>
-        </div>
-
-      </div>
-
-    <!-- Effects tab -->
-    {:else if $activeTab === 'modes'}
-      <div class="h-full overflow-y-auto">
-        <div class="max-w-2xl mx-auto px-8 py-8">
-          <div class="mb-6">
-            <h1 class="text-base font-semibold">Effects</h1>
-            <p class="text-sm text-white/55 mt-1">Changes apply instantly to the keyboard.</p>
+            <span class="text-[12px] text-ink-soft">{$status.battery}%{$status.connection === 'wired' ? ', charging' : ''}</span>
           </div>
-          <ModesPanel />
-        </div>
+        {/if}
+        {#if $status.connected && $status.firmware}
+          <div class="text-[11.5px] text-ink-faint mt-1">Firmware {$status.firmware}</div>
+        {/if}
+        {#if !$status.connected && $meta.web}
+          {#if $meta.hid_supported}
+            <button class="btn-primary w-full mt-2" on:click={() => run('connect_device', [], { success: 'Keyboard connected' })}>Connect keyboard</button>
+          {:else}
+            <p class="text-[11.5px] text-ink-mute mt-1 leading-snug">Open this page in Chrome or Edge to connect the keyboard.</p>
+          {/if}
+        {/if}
+        {#if !$status.connected && $status.error}
+          <p class="text-[11.5px] text-ink-mute mt-1 leading-snug">{$status.error}</p>
+        {/if}
       </div>
+    </div>
+  </nav>
 
-    <!-- Audio tab -->
-    {:else if $activeTab === 'audio'}
-      <div class="h-full overflow-y-auto">
-        <div class="max-w-lg mx-auto px-8 py-8">
-          <div class="mb-6">
-            <h1 class="text-base font-semibold">Audio Reactive</h1>
-            <p class="text-sm text-white/55 mt-1">Drive the keyboard LEDs from live audio.</p>
-          </div>
-          <AudioPanel />
+  <!-- main -->
+  <main class="flex-1 min-w-0 flex flex-col">
+    <header class="h-14 shrink-0 flex items-center justify-between px-7 border-b border-rule">
+      <h1 class="text-[17px] font-semibold">{NAV.find(n => n.id === $page)?.label}</h1>
+      {#if $profile}
+        <label class="flex items-center gap-2.5 text-[12.5px] text-ink-mute">
+          Profile
+          <select class="field pr-7 font-medium text-ink min-w-[160px]"
+                  value={$profile.id}
+                  on:change={e => run('activate_profile', [e.currentTarget.value])}>
+            {#each $profiles as p}<option value={p.id}>{p.name}</option>{/each}
+          </select>
+          {#if $status.auto_profile}<span class="chip bg-lav-wash text-lav-deep" title="Switched automatically for {$status.foreground}">Auto</span>{/if}
+        </label>
+      {/if}
+    </header>
+
+    <div class="flex-1 overflow-y-auto">
+      {#if failed}
+        <div class="p-10 max-w-lg">
+          <h2 class="text-lg font-semibold mb-2">The backend didn't start</h2>
+          <p class="text-ink-mute">{failed}. Close AK820 Studio and open it again.</p>
         </div>
-      </div>
-    {/if}
-
+      {:else if !$ready}
+        <div class="p-10 text-ink-mute">Starting…</div>
+      {:else if $page === 'lighting'}<LightingPage />
+      {:else if $page === 'keys'}<KeysPage />
+      {:else if $page === 'macros'}<MacrosPage />
+      {:else if $page === 'profiles'}<ProfilesPage />
+      {:else if $page === 'device'}<DevicePage />
+      {:else}<GamesPage />{/if}
+    </div>
   </main>
 </div>
 
-<!-- ── Toasts ─────────────────────────────────────────────────────── -->
-<div class="fixed bottom-5 right-5 flex flex-col gap-2 z-50 pointer-events-none">
+{#if $paletteOpen}<CommandPalette />{/if}
+
+<div class="fixed bottom-5 right-5 flex flex-col gap-2 z-50" aria-live="polite">
   {#each $toasts as t (t.id)}
-    {@const Icon = TOAST_ICON[t.type] ?? Info}
-    <div class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg
-                bg-[#111] border text-xs font-medium
-                pointer-events-auto shadow-2xl shadow-black/80
-                {TOAST_CLS[t.type] ?? TOAST_CLS.info}">
-      <svelte:component this={Icon} size={13}/>
+    <div class="max-w-sm rounded-xl px-4 py-2.5 text-[13px] shadow-lift border bg-card
+                {t.kind === 'bad' ? 'border-bad/30 text-bad' : t.kind === 'warn' ? 'border-warn/30 text-ink' : t.kind === 'ok' ? 'border-ok/30 text-ink' : 'border-rule text-ink'}">
       {t.message}
     </div>
   {/each}
 </div>
-
-<style>
-  .active-tab {
-    background: rgba(255,255,255,0.08);
-    color: white;
-    font-weight: 500;
-  }
-  .inactive-tab {
-    color: rgba(255,255,255,0.60);
-  }
-  .inactive-tab:hover {
-    background: rgba(255,255,255,0.05);
-    color: rgba(255,255,255,0.85);
-  }
-</style>
